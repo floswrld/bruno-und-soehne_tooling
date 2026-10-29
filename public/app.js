@@ -46,7 +46,7 @@ function toast(msg, isErr = false) {
   setTimeout(() => el.remove(), 3600);
 }
 
-const state = { me: null, users: [], timers: [] };
+const state = { me: null, users: [], timers: [], dirty: false };
 
 function clearTimers() {
   state.timers.forEach(clearInterval);
@@ -120,6 +120,7 @@ const I = {
   x: ico('<path d="M6 6l12 12M18 6 6 18"/>'),
   play: ico('<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>'),
   stop: ico('<rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/>'),
+  sub: ico('<path d="M6 4v8a3 3 0 0 0 3 3h10"/><path d="M15 11l4 4-4 4"/>'),
 };
 const mark = (cls = 'mark') => `<svg class="${cls}" viewBox="0 0 200 200" aria-hidden="true"><use href="#mark"/></svg>`;
 
@@ -139,7 +140,7 @@ const titleList = `<datalist id="titles">${TITLES.map((t) => `<option value="${e
 
 function openDialog(html, mount) {
   dialog.innerHTML = html;
-  dialog.showModal();
+  if (!dialog.open) dialog.showModal(); // ein offener Dialog wird einfach umgeblättert
   $$('[data-close]', dialog).forEach((b) => b.addEventListener('click', () => dialog.close()));
   mount?.(dialog);
   const first = $('input, select, textarea', dialog);
@@ -148,6 +149,8 @@ function openDialog(html, mount) {
 dialog.addEventListener('click', (e) => {
   if (e.target === dialog) dialog.close();
 });
+// Wurde im Dialog schon etwas gespeichert (z. B. Teilaufgaben), beim Schließen neu laden.
+dialog.addEventListener('close', () => state.dirty && route());
 const dlgHead = (title) => `<div class="dlg-head"><h2>${esc(title)}</h2><button type="button" class="icon-btn" data-close aria-label="Schließen">${I.x}</button></div>`;
 
 function bindForm(form, handler) {
@@ -180,6 +183,7 @@ const ROUTES = {
 };
 
 async function route() {
+  state.dirty = false;
   clearTimers();
   if (dialog.open) dialog.close();
   if (!state.me) {
@@ -398,7 +402,7 @@ async function viewDashboard(main) {
           ${
             mine.length
               ? `<div class="table-wrap"><table><thead><tr><th>Aufgabe</th><th>Spalte</th><th class="num">Punkte</th></tr></thead><tbody>${mine
-                  .map((t) => `<tr><td><b>${esc(t.title)}</b> <span class="muted small">#${t.id}</span></td><td><span class="chip">${statusName[t.status]}</span></td><td class="num">${t.points ?? '–'}</td></tr>`)
+                  .map((t) => `<tr><td><b>${esc(t.title)}</b> <span class="muted small">#${t.id}${t.parent_id ? ` · Teil von #${t.parent_id}` : ''}</span></td><td><span class="chip">${statusName[t.status]}</span></td><td class="num">${t.points ?? '–'}</td></tr>`)
                   .join('')}</tbody></table></div>`
               : `<div class="empty"><b>Nichts zugewiesen.</b>Nimm dir eine Aufgabe vom Board, bevor es jemand bemerkt.</div>`
           }
@@ -588,6 +592,16 @@ const COLUMNS = [
   ['review', 'Review'],
   ['done', 'Erledigt'],
 ];
+const STATUS_NAME = Object.fromEntries(COLUMNS);
+
+const progress = (done, total) =>
+  `<span class="progress${done === total ? ' full' : ''}"><span class="track"><span class="fill" style="width:${(done / total) * 100}%"></span></span><span class="num">${done}/${total}</span></span>`;
+
+// Rückmeldung des Servers zu übergeordneten Aufgaben
+function taskNotice(res) {
+  if (res?.reopened) toast(`#${res.reopened} ist wieder in Arbeit: Eine Teilaufgabe ist offen.`);
+  else if (res?.parent_ready) toast(`Alle Teilaufgaben erledigt. #${res.parent_ready} darf jetzt nach „Erledigt“.`);
+}
 
 async function viewBoard(main) {
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
@@ -600,9 +614,14 @@ async function viewBoard(main) {
   const points = tasks.reduce((a, t) => a + (t.points || 0), 0);
   const donePts = tasks.filter((t) => t.status === 'done').reduce((a, t) => a + (t.points || 0), 0);
 
+  // Aufgabe und Teilaufgaben bilden eine Familie, benannt nach der übergeordneten Aufgabe.
+  const family = (t) => t.parent_id || (t.sub_total ? t.id : '');
   const card = (t) => `
-    <button type="button" class="card" draggable="true" data-id="${t.id}" aria-label="${esc(t.title)} bearbeiten">
+    <button type="button" class="card${t.parent_id ? ' sub' : ''}" draggable="true" data-id="${t.id}" ${family(t) ? `data-family="${family(t)}"` : ''}
+      aria-label="${esc(t.title)}${t.parent_id ? `, Teilaufgabe von #${t.parent_id}` : ''} bearbeiten">
+      ${t.parent_id ? `<span class="parent">${I.sub}<span>#${t.parent_id} ${esc(t.parent_title)}</span></span>` : ''}
       <span class="t">${esc(t.title)}</span>
+      ${t.sub_total ? progress(t.sub_done, t.sub_total) : ''}
       <span class="meta">
         <span style="display:flex;gap:8px;align-items:center"><span class="key">#${t.id}</span>${t.points != null ? `<span class="pts">${t.points}</span>` : ''}</span>
         ${t.assignee_id ? `<span class="avatar sm" title="${esc(t.assignee_name)}">${esc(initials(t.assignee_name))}</span>` : '<span class="nobody" title="Niemand zugewiesen"></span>'}
@@ -642,10 +661,17 @@ async function viewBoard(main) {
     </div>`;
 
   $('[data-sprint]', main).onchange = (e) => (location.hash = `#/board?s=${e.target.value}`);
-  $$('[data-new]', main).forEach((b) => (b.onclick = () => taskDialog(null, b.dataset.new, sprints, sel)));
+  $$('[data-new]', main).forEach((b) => (b.onclick = () => taskDialog(null, b.dataset.new, sprints, sel, tasks)));
   $('[data-sprint-new]', main)?.addEventListener('click', () => sprintDialog(null));
   $('[data-sprint-edit]', main)?.addEventListener('click', () => sprintDialog(sprint));
-  $$('.card', main).forEach((c) => (c.onclick = () => taskDialog(tasks.find((t) => t.id === Number(c.dataset.id)), null, sprints, sel)));
+  $$('.card', main).forEach((c) => (c.onclick = () => taskDialog(tasks.find((t) => t.id === Number(c.dataset.id)), null, sprints, sel, tasks)));
+
+  // Beim Überfahren die ganze Familie hervorheben
+  $$('.card[data-family]', main).forEach((c) => {
+    const kin = (on) => $$(`.card[data-family="${c.dataset.family}"]`, main).forEach((k) => k.classList.toggle('kin', on));
+    c.addEventListener('mouseenter', () => kin(true));
+    c.addEventListener('mouseleave', () => kin(false));
+  });
 
   // Drag & Drop
   let dragId = null;
@@ -671,6 +697,11 @@ async function viewBoard(main) {
       col.classList.remove('over');
       if (!dragId) return;
       const status = col.dataset.status;
+      const dragged = tasks.find((t) => t.id === dragId);
+      if (status === 'done' && dragged.status !== 'done' && dragged.sub_done < dragged.sub_total) {
+        toast(`Erst alle Teilaufgaben erledigen (${dragged.sub_done}/${dragged.sub_total}).`, true);
+        return;
+      }
       const others = $$('.card', col).filter((c) => Number(c.dataset.id) !== dragId);
       const pos = (id) => tasks.find((t) => t.id === Number(id)).position;
       const after = others.findIndex((c) => e.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
@@ -685,8 +716,9 @@ async function viewBoard(main) {
       const listEl = $('.col-list', col);
       after === -1 ? listEl.append(el) : listEl.insertBefore(el, others[after]);
       try {
-        await patch(`/tasks/${dragId}`, { status, position });
+        const res = await patch(`/tasks/${dragId}`, { status, position });
         if (status === 'done') toast('Erledigt. Bruno ist (fast) zufrieden.');
+        taskNotice(res);
       } catch (ex) {
         toast(ex.message, true);
       }
@@ -695,16 +727,38 @@ async function viewBoard(main) {
   });
 }
 
-function taskDialog(task, status, sprints, selSprint) {
+function taskDialog(task, status, sprints, selSprint, tasks) {
   const users = state.users.filter((u) => u.active);
   const defaultSprint = task ? task.sprint_id : selSprint && selSprint !== 'none' ? Number(selSprint) : null;
   const canDelete = task && (task.created_by === state.me.id || state.me.role === 'admin');
+  const isSub = !!task?.parent_id;
+  let subs = task && !isSub ? tasks.filter((t) => t.parent_id === task.id) : [];
+  // Nur eine Ebene: Wer eigene Teilaufgaben hat, kann selbst keine werden.
+  const parents = subs.length ? [] : tasks.filter((t) => !t.parent_id && t.id !== task?.id);
+  if (isSub && !parents.some((p) => p.id === task.parent_id)) parents.unshift({ id: task.parent_id, title: task.parent_title, sprint_id: task.sprint_id });
+  const parent = isSub ? parents.find((p) => p.id === task.parent_id) : null;
+  const parentRecord = isSub ? tasks.find((t) => t.id === task.parent_id) : null;
+
   openDialog(
     `<form class="dlg" novalidate>
-      ${dlgHead(task ? `Aufgabe #${task.id}` : 'Neue Aufgabe')}
+      ${dlgHead(task ? `${isSub ? 'Teilaufgabe' : 'Aufgabe'} #${task.id}` : 'Neue Aufgabe')}
+      ${
+        isSub
+          ? `<p class="sub-of">${I.sub}<span>Teil von ${
+              parentRecord ? `<button type="button" class="link" data-open-parent>#${parent.id} ${esc(parent.title)}</button>` : `#${parent.id} ${esc(parent.title)}`
+            }</span></p>`
+          : ''
+      }
       <div class="form">
         <div class="field"><label for="tt">Titel</label><input class="input" id="tt" name="title" maxlength="140" required value="${esc(task?.title ?? '')}"></div>
         <div class="field"><label for="td">Beschreibung</label><textarea class="textarea" id="td" name="description" maxlength="4000">${esc(task?.description ?? '')}</textarea></div>
+        ${
+          subs.length
+            ? ''
+            : `<div class="field"><label for="tpa">Teil von</label><select class="select" id="tpa" name="parent_id"><option value="">Keiner anderen Aufgabe</option>${parents
+                .map((p) => `<option value="${p.id}" ${task?.parent_id === p.id ? 'selected' : ''}>#${p.id} ${esc(p.title)}</option>`)
+                .join('')}</select></div>`
+        }
         <div class="form-row">
           <div class="field"><label for="ts">Spalte</label><select class="select" id="ts" name="status">${COLUMNS.map(([k, n]) => `<option value="${k}" ${(task?.status ?? status) === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
           <div class="field"><label for="tp">Story Points</label><select class="select" id="tp" name="points"><option value="">Keine</option>${[1, 2, 3, 5, 8, 13, 21]
@@ -717,8 +771,21 @@ function taskDialog(task, status, sprints, selSprint) {
             .join('')}</select></div>
           <div class="field"><label for="tsp">Sprint</label><select class="select" id="tsp" name="sprint_id"><option value="">Ohne Sprint</option>${sprints
             .map((s) => `<option value="${s.id}" ${defaultSprint === s.id ? 'selected' : ''}>${esc(s.name)}</option>`)
-            .join('')}</select></div>
+            .join('')}</select><span class="hint" data-sprint-hint hidden>Wie die übergeordnete Aufgabe.</span></div>
         </div>
+        ${
+          task && !isSub
+            ? `<section class="subs" aria-label="Teilaufgaben">
+                <div class="subs-head"><h3>Teilaufgaben</h3><span class="small muted num" data-subs-count></span></div>
+                <div data-subs-progress></div>
+                <ul class="sub-list" data-subs-list></ul>
+                <div class="sub-add">
+                  <input class="input" data-sub-title maxlength="140" placeholder="Neue Teilaufgabe" aria-label="Neue Teilaufgabe">
+                  <button type="button" class="btn btn-ghost btn-sm" data-sub-add>${I.plus}Hinzufügen</button>
+                </div>
+              </section>`
+            : ''
+        }
         <p class="error" role="alert"></p>
       </div>
       <div class="dlg-foot">
@@ -730,20 +797,129 @@ function taskDialog(task, status, sprints, selSprint) {
     </form>`,
     (dlg) => {
       bindForm($('form', dlg), async (d) => {
-        const body = { ...d, points: d.points || null, assignee_id: d.assignee_id || null, sprint_id: d.sprint_id || null };
-        if (task) await patch(`/tasks/${task.id}`, body);
-        else await post('/tasks', body);
+        const body = { ...d, points: d.points || null, assignee_id: d.assignee_id || null, sprint_id: d.sprint_id || null, parent_id: d.parent_id || null };
+        const res = task ? await patch(`/tasks/${task.id}`, body) : await post('/tasks', body);
         toast(task ? 'Änderungen gespeichert.' : 'Aufgabe angelegt.');
+        taskNotice(res);
         route();
       });
       $('[data-delete]', dlg)?.addEventListener('click', async () => {
-        if (!confirmInline(dlg, 'Diese Aufgabe wirklich löschen?')) return;
+        const q = subs.length ? `Diese Aufgabe und ihre ${subs.length} Teilaufgaben wirklich löschen?` : 'Diese Aufgabe wirklich löschen?';
+        if (!confirmInline(dlg, q)) return;
         await del(`/tasks/${task.id}`);
         toast('Aufgabe gelöscht.');
         route();
       });
+      $('[data-open-parent]', dlg)?.addEventListener('click', () => taskDialog(parentRecord, null, sprints, selSprint, tasks));
+
+      // Teilaufgaben laufen im Sprint der übergeordneten Aufgabe mit.
+      const parentSel = $('#tpa', dlg);
+      const sprintSel = $('#tsp', dlg);
+      const syncSprint = () => {
+        const p = parents.find((x) => x.id === Number(parentSel.value));
+        sprintSel.disabled = !!p;
+        if (p) sprintSel.value = p.sprint_id ?? '';
+        $('[data-sprint-hint]', dlg).hidden = !p;
+      };
+      if (parentSel) {
+        parentSel.addEventListener('change', syncSprint);
+        syncSprint();
+      }
+
+      if (task && !isSub) mountSubtasks(dlg, task, () => subs, (list) => (subs = list), tasks, (s) => taskDialog(s, null, sprints, selSprint, tasks));
     }
   );
+}
+
+// Checkliste der Teilaufgaben im Aufgaben-Dialog. Änderungen werden sofort gespeichert.
+function mountSubtasks(dlg, task, getSubs, setSubs, tasks, openSub) {
+  const list = $('[data-subs-list]', dlg);
+  const input = $('[data-sub-title]', dlg);
+  const addBtn = $('[data-sub-add]', dlg);
+  const statusSel = $('#ts', dlg);
+
+  const render = () => {
+    const subs = getSubs();
+    const done = subs.filter((s) => s.status === 'done').length;
+    $('[data-subs-count]', dlg).textContent = subs.length ? `${done} von ${subs.length} erledigt` : '';
+    $('[data-subs-progress]', dlg).innerHTML = subs.length ? progress(done, subs.length) : '';
+    list.innerHTML = subs.length
+      ? subs
+          .map(
+            (s) => `<li class="${s.status === 'done' ? 'done' : ''}">
+              <input type="checkbox" data-toggle="${s.id}" ${s.status === 'done' ? 'checked' : ''} aria-label="#${s.id} ${esc(s.title)} erledigt">
+              <button type="button" class="sub-open" data-open-sub="${s.id}">${esc(s.title)}</button>
+              <span class="chip">${STATUS_NAME[s.status]}</span>
+              ${s.assignee_id ? `<span class="avatar sm" title="${esc(s.assignee_name)}">${esc(initials(s.assignee_name))}</span>` : '<span></span>'}
+            </li>`
+          )
+          .join('')
+      : `<li class="none small muted">Noch keine. Zerlege die Aufgabe in Schritte, die man an einem Tag schafft.</li>`;
+    // „Erledigt“ erst, wenn alle Teilaufgaben erledigt sind
+    const doneOpt = $('option[value="done"]', statusSel);
+    const blocked = done < subs.length && statusSel.value !== 'done';
+    doneOpt.disabled = blocked;
+    doneOpt.textContent = blocked ? `Erledigt (erst alle Teilaufgaben, ${done}/${subs.length})` : 'Erledigt';
+  };
+
+  const refresh = async () => {
+    const fresh = await api('GET', `/tasks?parent=${task.id}`);
+    setSubs(fresh);
+    tasks.splice(0, tasks.length, ...tasks.filter((t) => t.parent_id !== task.id), ...fresh);
+    render();
+  };
+
+  const afterChange = async (res) => {
+    state.dirty = true;
+    taskNotice(res);
+    if (res?.reopened === task.id) {
+      task.status = 'doing';
+      statusSel.value = 'doing';
+    }
+    await refresh();
+  };
+
+  list.addEventListener('change', async (e) => {
+    const id = Number(e.target.dataset.toggle);
+    if (!id) return;
+    e.target.disabled = true;
+    try {
+      await afterChange(await patch(`/tasks/${id}`, { status: e.target.checked ? 'done' : 'todo' }));
+    } catch (ex) {
+      e.target.checked = !e.target.checked;
+      e.target.disabled = false;
+      toast(ex.message, true);
+    }
+  });
+  list.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-open-sub]');
+    if (b) openSub(getSubs().find((s) => s.id === Number(b.dataset.openSub)));
+  });
+
+  const add = async () => {
+    const title = input.value.trim();
+    if (!title) return input.focus();
+    addBtn.disabled = true;
+    try {
+      const res = await post('/tasks', { title, parent_id: task.id, status: task.status === 'backlog' ? 'backlog' : 'todo' });
+      input.value = '';
+      await afterChange(res);
+      input.focus();
+    } catch (ex) {
+      toast(ex.message, true);
+    } finally {
+      addBtn.disabled = false;
+    }
+  };
+  addBtn.addEventListener('click', add);
+  // Enter legt die Teilaufgabe an, statt das ganze Formular abzuschicken.
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      add();
+    }
+  });
+  render();
 }
 
 function sprintDialog(sprint) {

@@ -10,6 +10,7 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 - **Rollen:** Geschäftsführung (Admin) und Belegschaft. Admins können Titel vergeben, Rechte ändern, Zugänge deaktivieren und Passwörter zurücksetzen. Die letzte aktive Geschäftsführung kann sich nicht selbst entmachten.
 - **Zeiterfassung:** Ein- und Ausstempeln, Zeit nachtragen und korrigieren, Wochenansicht. Admins sehen die Zeiten aller Mitarbeiter. Die Fleißrangliste auf der Übersicht sehen alle.
 - **Scrum-Board:** Sprints mit Ziel und Zeitraum, fünf Spalten, Story Points, Zuständige, Drag & Drop (auf dem Handy über den Bearbeiten-Dialog).
+- **Teilaufgaben:** Aufgaben lassen sich in Teilaufgaben zerlegen (eine Ebene). Sie stehen als eigene Karten auf dem Board, laufen im Sprint der übergeordneten Aufgabe mit, und deren Karte zeigt den Fortschritt. Nach „Erledigt“ darf eine Aufgabe erst, wenn alle Teilaufgaben erledigt sind. Wird danach eine Teilaufgabe wieder geöffnet oder neu angelegt, geht die Aufgabe zurück in Arbeit.
 - **Bauplan:** Platzhalter, wird als Nächstes ausgebaut.
 
 **Sicherheit:** Passwörter als PBKDF2-SHA256 (100.000 Runden, Salt). Sitzungen als HttpOnly-Cookie, in der Datenbank nur als SHA-256-Hash gespeichert. Login-Sperre nach 8 Fehlversuchen in 15 Minuten. Schreibende Anfragen müssen JSON vom eigenen Origin sein (Schutz gegen CSRF). Schriften liegen lokal, es gehen keine Anfragen an Google.

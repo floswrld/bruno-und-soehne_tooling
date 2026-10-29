@@ -472,23 +472,63 @@ app.patch('/api/sprints/:id', async (c) => {
 
 // ---------- Aufgaben (Scrum-Board) ----------
 
+type Task = {
+  id: number;
+  title: string;
+  description: string;
+  status: (typeof STATUSES)[number];
+  points: number | null;
+  assignee_id: number | null;
+  sprint_id: number | null;
+  position: number;
+  parent_id: number | null;
+  created_by: number | null;
+};
+
 app.get('/api/tasks', async (c) => {
   const sprint = c.req.query('sprint');
-  let where = '';
+  const parent = c.req.query('parent');
+  const where: string[] = [];
   const binds: unknown[] = [];
-  if (sprint === 'none') where = 'WHERE t.sprint_id IS NULL';
+  if (sprint === 'none') where.push('t.sprint_id IS NULL');
   else if (sprint) {
-    where = 'WHERE t.sprint_id = ?';
+    where.push('t.sprint_id = ?');
     binds.push(Number(sprint));
   }
+  if (parent) {
+    where.push('t.parent_id = ?');
+    binds.push(Number(parent));
+  }
   const { results } = await c.env.DB.prepare(
-    `SELECT t.*, u.display_name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id
-     ${where} ORDER BY t.position, t.id`
+    `SELECT t.*, u.display_name AS assignee_name, p.title AS parent_title,
+       (SELECT COUNT(*) FROM tasks s WHERE s.parent_id = t.id) AS sub_total,
+       (SELECT COUNT(*) FROM tasks s WHERE s.parent_id = t.id AND s.status = 'done') AS sub_done
+     FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id LEFT JOIN tasks p ON p.id = t.parent_id
+     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY t.position, t.id`
   )
     .bind(...binds)
     .all();
   return c.json(results);
 });
+
+// Übergeordnete Aufgabe prüfen: muss existieren und darf selbst keine Teilaufgabe sein (nur eine Ebene).
+async function parentTask(db: D1Database, pid: number | null, selfId?: number): Promise<Task | null> {
+  if (pid === null) return null;
+  if (pid === selfId) fail(400, 'Eine Aufgabe kann nicht ihre eigene Teilaufgabe sein.');
+  const p = await db.prepare('SELECT * FROM tasks WHERE id = ?').bind(pid).first<Task>();
+  if (!p) fail(404, 'Übergeordnete Aufgabe nicht gefunden.');
+  if (p!.parent_id) fail(400, 'Teilaufgaben können keine eigenen Teilaufgaben haben.');
+  return p!;
+}
+
+async function openSubtasks(db: D1Database, id: number): Promise<number> {
+  const r = await db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ? AND status != 'done'`).bind(id).first<{ n: number }>();
+  return r?.n ?? 0;
+}
+
+// Eine erledigte Aufgabe mit offener Teilaufgabe ist nicht erledigt: zurück in Arbeit.
+const reopenTask = (db: D1Database, id: number) =>
+  db.prepare(`UPDATE tasks SET status = 'doing', updated_at = datetime('now') WHERE id = ?`).bind(id);
 
 function status(v: unknown): string {
   if (!STATUSES.includes(v as (typeof STATUSES)[number])) return fail(400, 'Unbekannte Spalte.');
@@ -507,18 +547,28 @@ app.post('/api/tasks', async (c) => {
   const title = str(b.title, 'Titel', { max: 140 });
   const desc = str(b.description, 'Beschreibung', { min: 0, max: 4000, optional: true });
   const st = b.status !== undefined ? status(b.status) : 'backlog';
-  const max = await c.env.DB.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM tasks WHERE status = ?').bind(st).first<{ p: number }>();
-  const res = await c.env.DB.prepare(
-    'INSERT INTO tasks (title, description, status, points, assignee_id, sprint_id, position, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  )
-    .bind(title, desc, st, points(b.points), int(b.assignee_id, 'Zuständig'), int(b.sprint_id, 'Sprint'), (max?.p ?? 0) + 1, me.id)
-    .run();
-  return c.json({ id: res.meta.last_row_id }, 201);
+  const db = c.env.DB;
+  const parent = await parentTask(db, int(b.parent_id, 'Übergeordnete Aufgabe'));
+  // Teilaufgaben laufen immer im Sprint ihrer übergeordneten Aufgabe.
+  const sprint = parent ? parent.sprint_id : int(b.sprint_id, 'Sprint');
+  const max = await db.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM tasks WHERE status = ?').bind(st).first<{ p: number }>();
+  const stmts = [
+    db
+      .prepare(
+        'INSERT INTO tasks (title, description, status, points, assignee_id, sprint_id, position, parent_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .bind(title, desc, st, points(b.points), int(b.assignee_id, 'Zuständig'), sprint, (max?.p ?? 0) + 1, parent?.id ?? null, me.id),
+  ];
+  const reopen = parent?.status === 'done' && st !== 'done';
+  if (reopen) stmts.push(reopenTask(db, parent!.id));
+  const res = await db.batch(stmts);
+  return c.json({ id: res[0].meta.last_row_id, reopened: reopen ? parent!.id : null }, 201);
 });
 
 app.patch('/api/tasks/:id', async (c) => {
+  const db = c.env.DB;
   const id = Number(c.req.param('id'));
-  const t = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first<Record<string, unknown>>();
+  const t = await db.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first<Task>();
   if (!t) fail(404, 'Aufgabe nicht gefunden.');
   const b = await body(c);
   const next = {
@@ -529,15 +579,38 @@ app.patch('/api/tasks/:id', async (c) => {
     assignee_id: b.assignee_id !== undefined ? int(b.assignee_id, 'Zuständig') : t!.assignee_id,
     sprint_id: b.sprint_id !== undefined ? int(b.sprint_id, 'Sprint') : t!.sprint_id,
     position: b.position !== undefined ? Number(b.position) : t!.position,
+    parent_id: b.parent_id !== undefined ? int(b.parent_id, 'Übergeordnete Aufgabe') : t!.parent_id,
   };
-  if (!Number.isFinite(next.position as number)) fail(400, 'Ungültige Position.');
-  await c.env.DB.prepare(
-    `UPDATE tasks SET title = ?, description = ?, status = ?, points = ?, assignee_id = ?, sprint_id = ?, position = ?,
-     updated_at = datetime('now') WHERE id = ?`
-  )
-    .bind(next.title, next.description, next.status, next.points, next.assignee_id, next.sprint_id, next.position, id)
-    .run();
-  return c.json({ ok: true });
+  if (!Number.isFinite(next.position)) fail(400, 'Ungültige Position.');
+
+  const parent = await parentTask(db, next.parent_id, id);
+  if (parent && next.parent_id !== t!.parent_id && (await db.prepare('SELECT 1 FROM tasks WHERE parent_id = ? LIMIT 1').bind(id).first())) {
+    fail(400, 'Diese Aufgabe hat eigene Teilaufgaben und kann keine Teilaufgabe werden.');
+  }
+  if (parent) next.sprint_id = parent.sprint_id;
+  if (next.status === 'done' && t!.status !== 'done') {
+    const open = await openSubtasks(db, id);
+    if (open) fail(409, `Erst alle Teilaufgaben erledigen. ${open === 1 ? 'Eine ist' : `${open} sind`} noch offen.`);
+  }
+
+  const stmts = [
+    db
+      .prepare(
+        `UPDATE tasks SET title = ?, description = ?, status = ?, points = ?, assignee_id = ?, sprint_id = ?, position = ?, parent_id = ?,
+         updated_at = datetime('now') WHERE id = ?`
+      )
+      .bind(next.title, next.description, next.status, next.points, next.assignee_id, next.sprint_id, next.position, next.parent_id, id),
+  ];
+  // Teilaufgaben ziehen mit, wenn die Aufgabe den Sprint wechselt.
+  if (next.sprint_id !== t!.sprint_id) stmts.push(db.prepare('UPDATE tasks SET sprint_id = ? WHERE parent_id = ?').bind(next.sprint_id, id));
+  const reopen = parent?.status === 'done' && next.status !== 'done';
+  if (reopen) stmts.push(reopenTask(db, parent!.id));
+  await db.batch(stmts);
+
+  // Letzte offene Teilaufgabe erledigt? Dann darf die übergeordnete Aufgabe nach „Erledigt“.
+  const parentReady =
+    parent && parent.status !== 'done' && next.status === 'done' && t!.status !== 'done' && !(await openSubtasks(db, parent.id));
+  return c.json({ ok: true, reopened: reopen ? parent!.id : null, parent_ready: parentReady ? parent!.id : null });
 });
 
 app.delete('/api/tasks/:id', async (c) => {
@@ -545,7 +618,11 @@ app.delete('/api/tasks/:id', async (c) => {
   const t = await c.env.DB.prepare('SELECT created_by FROM tasks WHERE id = ?').bind(id).first<{ created_by: number }>();
   if (!t) fail(404, 'Aufgabe nicht gefunden.');
   if (t!.created_by !== c.get('user').id) adminOnly(c);
-  await c.env.DB.prepare('DELETE FROM tasks WHERE id = ?').bind(id).run();
+  // Teilaufgaben gehen mit (ON DELETE CASCADE, hier zur Sicherheit ausdrücklich).
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM tasks WHERE parent_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM tasks WHERE id = ?').bind(id),
+  ]);
   return c.json({ ok: true });
 });
 
