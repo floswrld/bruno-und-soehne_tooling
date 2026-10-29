@@ -17,66 +17,29 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 
 ## KI-Agenten (MCP)
 
-KI-Agenten (Claude Code, Cursor, …) können über `/mcp` das Scrum-Board bearbeiten. Nur das Board, kein Löschen.
+KI-Apps können über `https://<adresse>/mcp` das Scrum-Board bearbeiten. Nur das Board, kein Löschen.
 
-1. Geschäftsführung: **Personal → Mitarbeiter bearbeiten → KI-Agenten (MCP) → Schlüssel**.
-2. Den angezeigten Befehl ausführen (der Schlüssel erscheint nur einmal):
+### Mit Anmeldung (jeder selbst)
 
-   ```bash
-   claude mcp add --transport http bruno-board https://<adresse>/mcp --header "Authorization: Bearer bsmcp_…"
-   ```
+In der KI-App einen eigenen Connector (MCP) mit der Adresse anlegen. Es öffnet sich die Anmeldung des Intranets, dann **Erlauben**. Die App arbeitet danach in deinem Namen. Verbundene Apps stehen unter **Profil → KI-Apps** und lassen sich dort trennen.
 
-Andere Programme: gleiche Adresse, Kopfzeile `Authorization: Bearer …`. Widerrufen im selben Dialog.
-
-### Einrichten je Programm
-
-| Programm | Geht mit dem Schlüssel? |
+| Programm | So geht's |
 | --- | --- |
-| Claude Code | Ja |
-| Claude App (Web, Desktop, Handy) | Ja, wenn „Request headers“ angeboten wird (Beta). Sonst Claude Desktop über `mcp-remote` |
-| ChatGPT (Web, App) | Nein, ChatGPT kann nur OAuth. Stattdessen Codex CLI |
-| Gemini (Web, App) | Nein, nur OAuth und nur in den USA. Stattdessen Gemini CLI |
+| Claude App (Web, Desktop, Handy) | claude.ai → **Customize → Connectors → Add custom connector**, Adresse eintragen, **Connect** |
+| ChatGPT | Developer Mode einschalten, dann unter Apps eine eigene App mit der Adresse anlegen, Anmeldung **OAuth** |
+| Claude Code | `claude mcp add --transport http bruno-board https://<adresse>/mcp`, dann in Claude Code `/mcp` → anmelden |
+| Cursor, VS Code, Codex, Gemini CLI | Adresse als MCP-Server eintragen, beim ersten Zugriff fragt das Programm nach der Anmeldung |
+| Gemini App | Geht nicht: eigene Connectoren gibt es dort nur in den USA |
 
-In allen Beispielen `<adresse>` und `bsmcp_…` ersetzen.
+### Mit Schlüssel (nur Geschäftsführung)
 
-**Claude Code:** der Befehl oben.
+Für Skripte oder Programme ohne Anmeldung: **Personal → Mitarbeiter bearbeiten → KI-Agenten (MCP) → Schlüssel**. Der Schlüssel erscheint nur einmal und kommt als Kopfzeile `Authorization: Bearer bsmcp_…` mit, z. B.:
 
-**Claude App:** auf claude.ai **Customize → Connectors → Add custom connector**. URL `https://<adresse>/mcp`, Anmeldung **No sign-in**, unter **Request headers** den Namen `authorization` und als Wert `Bearer bsmcp_…` (mit „Bearer “). Gilt danach auch in der Desktop- und Handy-App. Bei Team/Enterprise legt das die Organisation an, dann teilen sich alle einen Schlüssel.
-
-**Claude Desktop ohne „Request headers“:** braucht [Node.js](https://nodejs.org). **Settings → Developer → Edit Config**, eintragen und Claude neu starten:
-
-```json
-{
-  "mcpServers": {
-    "bruno-board": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://<adresse>/mcp", "--header", "Authorization:${AUTH}"],
-      "env": { "AUTH": "Bearer bsmcp_…" }
-    }
-  }
-}
+```bash
+claude mcp add --transport http bruno-board https://<adresse>/mcp --header "Authorization: Bearer bsmcp_…"
 ```
 
-**Codex CLI (OpenAI):** in `~/.codex/config.toml` eintragen und den Schlüssel als Umgebungsvariable `BRUNO_MCP_KEY` setzen (nur `bsmcp_…`, ohne „Bearer“):
-
-```toml
-[mcp_servers.bruno-board]
-url = "https://<adresse>/mcp"
-bearer_token_env_var = "BRUNO_MCP_KEY"
-```
-
-**Gemini CLI:** in `~/.gemini/settings.json` eintragen:
-
-```json
-{
-  "mcpServers": {
-    "bruno-board": {
-      "httpUrl": "https://<adresse>/mcp",
-      "headers": { "Authorization": "Bearer bsmcp_…" }
-    }
-  }
-}
-```
+Widerrufen im selben Dialog. Dort sieht die Geschäftsführung auch die selbst verbundenen Apps und kann sie trennen.
 
 ## Online stellen (ca. 10 Minuten)
 
@@ -87,9 +50,10 @@ npm install
 npx wrangler login                        # öffnet den Browser, einmal bestätigen
 
 npx wrangler d1 create bruno-intranet     # gibt eine database_id aus
+npx wrangler kv namespace create OAUTH_KV # gibt eine id aus (für die Anmeldung von KI-Apps)
 ```
 
-Die ausgegebene `database_id` in `wrangler.jsonc` eintragen (statt der Nullen). Dann:
+Die ausgegebene `database_id` und die KV-`id` in `wrangler.jsonc` eintragen. Dann:
 
 ```bash
 npm run db:remote                         # Tabellen anlegen
@@ -131,7 +95,10 @@ npm run dev                               # http://localhost:8787
 ## Aufbau
 
 ```
-src/index.ts          API (Hono): Auth, Personal, Zeiten, Sprints, Aufgaben
+src/index.ts          API (Hono): Auth, Personal, Zeiten, Sprints, Aufgaben, Routen
+src/tasks.ts          Aufgaben und Board-Regeln, gemeinsam für App und MCP
+src/mcp.ts            MCP-Server für KI-Apps (nur Scrum-Board)
+src/oauth.ts          Anmeldung von KI-Apps (OAuth), Zustimmungsseite, Verbindungen
 src/crypto.ts         Passwort-Hashing, Tokens, Einmal-Passwörter
 migrations/           Datenbankschema (D1/SQLite)
 public/               Die App: index.html, app.js, styles.css, Schriften, Logo

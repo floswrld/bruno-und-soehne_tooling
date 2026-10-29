@@ -3,11 +3,13 @@
   "name": "bruno-intranet",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-15",
+  // Pflicht für OAuth-Clients mit Metadaten-Dokument (z. B. Claude): Abrufe nur ins öffentliche Netz.
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/mcp"]
+    "run_worker_first": ["/api/*", "/mcp", "/authorize", "/oauth/*", "/.well-known/*"]
   },
   "d1_databases": [
     {
@@ -17,5 +19,7 @@
       "migrations_dir": "migrations"
     }
   ],
+  // OAuth-Clients, Freigaben und Tokens (Tokens nur als Hash)
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "OAUTH_KV_ID_FEHLT" }],
   "observability": { "enabled": true }
 }
