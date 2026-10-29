@@ -322,6 +322,40 @@ td .person span { display: block; font-size: 13px; color: var(--muted); }
 .card .key { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .card .nobody { width: 26px; height: 26px; border-radius: 50%; border: 1px dashed var(--line-strong); }
 
+/* Teilaufgaben: Messingkante, darüber die übergeordnete Aufgabe */
+.card.sub { border-left: 3px solid var(--brass); padding-left: 12px; }
+.card .parent { display: flex; align-items: center; gap: 5px; min-width: 0; margin-bottom: -4px; font-size: 12px; color: var(--muted); }
+.card .parent svg { width: 13px; height: 13px; flex: none; color: var(--brass); }
+.card .parent span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card.kin { border-color: var(--brass); box-shadow: 0 0 0 1px var(--brass); }
+
+.progress { display: flex; align-items: center; gap: 8px; }
+.progress .track { flex: 1; height: 5px; border-radius: 99px; background: rgba(28, 20, 22, .08); overflow: hidden; }
+.progress .fill { display: block; height: 100%; border-radius: inherit; background: var(--bordeaux); transition: width .3s var(--ease); }
+.progress.full .fill { background: var(--moss); }
+.progress .num { font-size: 12px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.progress.full .num { color: var(--moss); }
+
+/* Teilaufgaben im Dialog */
+.sub-of { display: flex; align-items: center; gap: 6px; margin: -10px 0 0; font-size: 13.5px; color: var(--muted); }
+.sub-of svg { width: 15px; height: 15px; flex: none; color: var(--brass); }
+.link { border: 0; background: none; padding: 0; color: var(--bordeaux); font-weight: 600; cursor: pointer; text-align: left; }
+.link:hover { text-decoration: underline; }
+.subs { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--line); }
+.subs-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.subs-head h3 { font-size: 13px; font-weight: 600; color: var(--ink-soft); margin: 0; }
+.sub-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.sub-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.sub-list li:last-child { border-bottom: 0; }
+.sub-list li.none { display: block; padding: 4px 0; }
+.sub-list input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--moss); cursor: pointer; }
+.sub-open { border: 0; background: none; padding: 6px 0; text-align: left; cursor: pointer; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub-open:hover { color: var(--bordeaux); text-decoration: underline; }
+.sub-list li.done .sub-open { color: var(--muted); text-decoration: line-through; }
+.sub-add { display: flex; gap: 8px; }
+.sub-add .input { min-height: 36px; padding: 6px 12px; }
+@media (max-width: 480px) { .sub-list .chip { display: none; } }
+
 /* ---------- Bauplan (Platzhalter) ---------- */
 
 .blueprint {
