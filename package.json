@@ -1,0 +1,21 @@
+{
+  "name": "bruno-intranet",
+  "version": "1.0.0",
+  "description": "Internes Tooling der Bruno & Söhne GmbH",
+  "scripts": {
+    "dev": "wrangler dev",
+    "db:local": "wrangler d1 migrations apply bruno-intranet --local",
+    "db:remote": "wrangler d1 migrations apply bruno-intranet --remote",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "hono": "^4.13.14"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261029.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.155.0"
+  },
+  "private": true
+}

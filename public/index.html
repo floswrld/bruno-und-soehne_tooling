@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1C1416">
+  <title>Bruno & Söhne Intranet</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/hanken-grotesk.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/bodoni-moda.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- Bildmarke: Tropfen aus Server-Racks. Nutzt currentColor, die Racks sind ausgestanzt. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <mask id="rack-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+        <rect width="200" height="200" fill="#fff"/>
+        <rect x="30" y="98" width="140" height="18" fill="#000"/>
+        <rect x="30" y="122" width="140" height="18" fill="#000"/>
+        <rect x="30" y="146" width="140" height="18" fill="#000"/>
+        <rect x="30" y="170" width="140" height="18" fill="#000"/>
+      </mask>
+      <symbol id="mark" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="96" fill="none" stroke="currentColor" stroke-width="3"/>
+        <circle cx="100" cy="100" r="88" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".55"/>
+        <path d="M100 18C100 18 38 96 38 136a62 62 0 0 0 124 0C162 96 100 18 100 18Z" fill="currentColor" mask="url(#rack-cut)"/>
+        <g fill="currentColor">
+          <circle cx="66" cy="107" r="3"/><circle cx="76" cy="107" r="3"/>
+          <circle cx="56" cy="131" r="3"/><circle cx="66" cy="131" r="3"/>
+          <circle cx="56" cy="155" r="3"/><circle cx="66" cy="155" r="3"/>
+          <circle cx="66" cy="179" r="3"/><circle cx="76" cy="179" r="3"/>
+        </g>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div id="app" aria-live="polite"></div>
+  <div id="toasts" role="status" aria-live="polite"></div>
+  <dialog id="dialog"></dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
