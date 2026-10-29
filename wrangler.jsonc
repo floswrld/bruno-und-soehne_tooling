@@ -20,6 +20,6 @@
     }
   ],
   // OAuth-Clients, Freigaben und Tokens (Tokens nur als Hash)
-  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "OAUTH_KV_ID_FEHLT" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "fd85f6dacb0d4efb97d92e0fb485b1db" }],
   "observability": { "enabled": true }
 }
