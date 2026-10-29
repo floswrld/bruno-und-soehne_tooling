@@ -17,25 +17,16 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 
 ## KI-Agenten (MCP)
 
-Unter `/mcp` (z. B. `https://bruno.vasica.de/mcp`) läuft ein MCP-Server (Streamable HTTP). Ein Agent arbeitet damit im Namen eines Mitarbeiters und kann **nur das Scrum-Board** bedienen:
+KI-Agenten (Claude Code, Cursor, …) können über `/mcp` das Scrum-Board bearbeiten. Nur das Board, kein Löschen.
 
-| Werkzeug | Was es tut |
-| --- | --- |
-| `list_sprints`, `list_people` | Sprints und Mitarbeiter (nur ID, Name, Titel) anzeigen |
-| `list_tasks`, `get_task` | Aufgaben suchen und filtern, eine Aufgabe mit Beschreibung und Teilaufgaben |
-| `create_task` | Aufgabe oder Teilaufgabe anlegen |
-| `update_task` | Titel, Beschreibung, Zuständigkeit, Sprint, übergeordnete Aufgabe ändern |
-| `move_task` | In eine andere Spalte verschieben |
+1. Geschäftsführung: **Personal → Mitarbeiter bearbeiten → KI-Agenten (MCP) → Schlüssel**.
+2. Den angezeigten Befehl ausführen (der Schlüssel erscheint nur einmal):
 
-Löschen, Sprints bearbeiten, Zeiterfassung und Personal gibt es über MCP nicht. Es gelten dieselben Regeln wie in der App (z. B. „Erledigt“ erst, wenn alle Teilaufgaben erledigt sind).
+   ```bash
+   claude mcp add --transport http bruno-board https://<deine-adresse>/mcp --header "Authorization: Bearer bsmcp_…"
+   ```
 
-**Schlüssel:** Nur die Geschäftsführung legt sie an: **Personal → Mitarbeiter bearbeiten → KI-Agenten (MCP)**. Der Schlüssel wird einmal angezeigt, zusammen mit dem fertigen Befehl für Claude Code:
-
-```bash
-claude mcp add --transport http bruno-board https://bruno.vasica.de/mcp --header "Authorization: Bearer bsmcp_…"
-```
-
-Andere Programme bekommen dieselbe Adresse und die Kopfzeile `Authorization: Bearer …`. Gespeichert wird nur der SHA-256-Hash. Ein Schlüssel funktioniert nur unter `/mcp`, nicht für die normale App. Widerrufen geht im selben Dialog; wird ein Mitarbeiter deaktiviert, sind seine Schlüssel sofort gesperrt. Jede Änderung per Agent steht in den Workers Logs (wer, welches Werkzeug, welche Angaben).
+Andere Programme: gleiche Adresse, Kopfzeile `Authorization: Bearer …`. Widerrufen im selben Dialog.
 
 ## Online stellen (ca. 10 Minuten)
 
