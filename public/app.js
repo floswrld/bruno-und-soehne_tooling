@@ -46,7 +46,7 @@ function toast(msg, isErr = false) {
   setTimeout(() => el.remove(), 3600);
 }
 
-const state = { me: null, users: [], timers: [], dirty: false };
+const state = { me: null, users: [], timers: [], dirty: false, view: null, seq: 0 };
 
 // Rücksprung nach der Anmeldung, nur zur eigenen Zustimmungsseite
 const oauthNext = (() => {
@@ -189,18 +189,25 @@ const ROUTES = {
 };
 
 async function route() {
+  const seq = ++state.seq;
   state.dirty = false;
   clearTimers();
   if (dialog.open) dialog.close();
+  let fresh = false;
   if (!state.me) {
     try {
       state.me = await api('GET', '/me');
+      fresh = true;
     } catch {
+      state.view = null;
       const setup = await api('GET', '/setup').catch(() => ({ needed: false }));
       return setup.needed ? viewSetup() : viewLogin();
     }
   }
-  if (state.me.must_change_password) return viewForcePassword();
+  if (state.me.must_change_password) {
+    state.view = null;
+    return viewForcePassword();
+  }
   // Kam die Anmeldung von einer KI-App (OAuth), geht es zurück zur Zustimmungsseite.
   if (oauthNext) return location.replace(oauthNext);
 
@@ -208,14 +215,30 @@ async function route() {
   if (!ROUTES[key] || (ROUTES[key].admin && state.me.role !== 'admin')) key = '';
   const r = ROUTES[key];
   document.title = `${r.title} – Bruno & Söhne`;
-  renderShell(key);
-  const main = $('.main-inner');
-  main.innerHTML = `<div class="loading">${mark()}</div>`;
+
+  // Bleibt man auf derselben Seite (z. B. nach dem Verschieben einer Karte), bleibt sie stehen,
+  // bis die neue Fassung im Hintergrund fertig ist. Kein Ladebild, kein Springen.
+  const old = !fresh && state.view === key ? $('.main-inner') : null;
+  if (!old) {
+    renderShell(key);
+    $('.main-inner').innerHTML = `<div class="loading">${mark()}</div>`;
+  }
+  state.view = key;
+  const main = old ? document.createElement('div') : $('.main-inner');
+  main.className = 'main-inner';
   try {
     state.users = await api('GET', '/users');
     await r.view(main);
   } catch (ex) {
+    if (seq !== state.seq) return;
+    if (old) return toast(ex.message, true);
     main.innerHTML = `<div class="panel empty"><b>Das hat nicht geklappt.</b>${esc(ex.message)}</div>`;
+  }
+  if (seq !== state.seq) return; // inzwischen kam eine neuere Änderung
+  if (old) {
+    const scrolled = $$('.board, .table-wrap', old).map((el) => el.scrollLeft);
+    old.replaceWith(main);
+    $$('.board, .table-wrap', main).forEach((el, i) => (el.scrollLeft = scrolled[i] ?? 0));
   }
   $('.main')?.focus({ preventScroll: true });
 }
