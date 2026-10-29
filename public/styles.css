@@ -434,6 +434,14 @@ dialog[open] { animation: rise .22s var(--ease); }
   padding: 20px; border-radius: var(--r-md); background: var(--ink); color: var(--brass-light);
   user-select: all; word-break: break-all;
 }
+.secret.key { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 15px; font-weight: 500; padding: 16px; }
+.code {
+  margin: 0; padding: 12px 14px; border-radius: var(--r-md); background: var(--steel-wash); color: var(--ink);
+  font: 12.5px/1.5 ui-monospace, 'Cascadia Mono', Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+  user-select: all; max-height: 180px; overflow: auto;
+}
+.keys .key-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 480px) { .keys li { grid-template-columns: minmax(0, 1fr) auto; } .keys li > .small { display: none; } }
 
 #toasts { position: fixed; z-index: 100; left: 50%; bottom: 24px; transform: translateX(-50%); display: grid; gap: 8px; width: max-content; max-width: calc(100vw - 32px); }
 .toast { background: var(--ink); color: #fff; padding: 12px 18px; border-radius: 999px; font-weight: 500; box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .4); animation: rise .2s var(--ease); }

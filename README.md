@@ -15,6 +15,28 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 
 **Sicherheit:** Passwörter als PBKDF2-SHA256 (100.000 Runden, Salt). Sitzungen als HttpOnly-Cookie, in der Datenbank nur als SHA-256-Hash gespeichert. Login-Sperre nach 8 Fehlversuchen in 15 Minuten. Schreibende Anfragen müssen JSON vom eigenen Origin sein (Schutz gegen CSRF). Schriften liegen lokal, es gehen keine Anfragen an Google.
 
+## KI-Agenten (MCP)
+
+Unter `/mcp` (z. B. `https://bruno.vasica.de/mcp`) läuft ein MCP-Server (Streamable HTTP). Ein Agent arbeitet damit im Namen eines Mitarbeiters und kann **nur das Scrum-Board** bedienen:
+
+| Werkzeug | Was es tut |
+| --- | --- |
+| `list_sprints`, `list_people` | Sprints und Mitarbeiter (nur ID, Name, Titel) anzeigen |
+| `list_tasks`, `get_task` | Aufgaben suchen und filtern, eine Aufgabe mit Beschreibung und Teilaufgaben |
+| `create_task` | Aufgabe oder Teilaufgabe anlegen |
+| `update_task` | Titel, Beschreibung, Zuständigkeit, Sprint, übergeordnete Aufgabe ändern |
+| `move_task` | In eine andere Spalte verschieben |
+
+Löschen, Sprints bearbeiten, Zeiterfassung und Personal gibt es über MCP nicht. Es gelten dieselben Regeln wie in der App (z. B. „Erledigt“ erst, wenn alle Teilaufgaben erledigt sind).
+
+**Schlüssel:** Nur die Geschäftsführung legt sie an: **Personal → Mitarbeiter bearbeiten → KI-Agenten (MCP)**. Der Schlüssel wird einmal angezeigt, zusammen mit dem fertigen Befehl für Claude Code:
+
+```bash
+claude mcp add --transport http bruno-board https://bruno.vasica.de/mcp --header "Authorization: Bearer bsmcp_…"
+```
+
+Andere Programme bekommen dieselbe Adresse und die Kopfzeile `Authorization: Bearer …`. Gespeichert wird nur der SHA-256-Hash. Ein Schlüssel funktioniert nur unter `/mcp`, nicht für die normale App. Widerrufen geht im selben Dialog; wird ein Mitarbeiter deaktiviert, sind seine Schlüssel sofort gesperrt. Jede Änderung per Agent steht in den Workers Logs (wer, welches Werkzeug, welche Angaben).
+
 ## Online stellen (ca. 10 Minuten)
 
 Voraussetzungen: [Node.js](https://nodejs.org) ab Version 20 und dein Cloudflare-Account (der, in dem vasica.de liegt).

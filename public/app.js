@@ -1105,6 +1105,15 @@ async function viewPeople(main) {
   $$('[data-edit]', main).forEach((b) => (b.onclick = () => userDialog(users.find((u) => u.id === Number(b.dataset.edit)))));
 }
 
+async function copy(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Kopiert.');
+  } catch {
+    toast('Kopieren nicht möglich. Bitte markieren und abschreiben.', true);
+  }
+}
+
 function showSecret(name, pw) {
   openDialog(
     `<div class="dlg">
@@ -1114,17 +1123,105 @@ function showSecret(name, pw) {
       <div class="dlg-foot"><button class="btn btn-ghost" data-copy>Kopieren</button><button class="btn btn-primary" data-close>Fertig</button></div>
     </div>`,
     (dlg) => {
-      $('[data-copy]', dlg).onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(pw);
-          toast('Kopiert.');
-        } catch {
-          toast('Kopieren nicht möglich. Bitte markieren und abschreiben.', true);
-        }
-      };
+      $('[data-copy]', dlg).onclick = () => copy(pw);
       dlg.addEventListener('close', () => route(), { once: true });
     }
   );
+}
+
+// Neuer MCP-Schlüssel: einmal anzeigen, mit fertiger Einrichtung zum Kopieren
+function showMcpKey(u, key) {
+  const url = `${location.origin}/mcp`;
+  const cmd = `claude mcp add --transport http bruno-board ${url} --header "Authorization: Bearer ${key}"`;
+  const config = JSON.stringify({ mcpServers: { 'bruno-board': { type: 'http', url, headers: { Authorization: `Bearer ${key}` } } } }, null, 2);
+  openDialog(
+    `<div class="dlg">
+      ${dlgHead('MCP-Schlüssel')}
+      <p style="margin:0">Für ${esc(u.display_name)}. Der Schlüssel wird nur jetzt angezeigt. Ein KI-Agent kann damit in ${esc(u.display_name)}s Namen das Scrum-Board lesen und bearbeiten, aber nichts löschen und nichts anderes sehen.</p>
+      <div class="secret key">${esc(key)}</div>
+      <div class="field"><label>Claude Code</label><pre class="code">${esc(cmd)}</pre></div>
+      <div class="field"><label>Andere Programme (Cursor, VS Code, …)</label><pre class="code">${esc(config)}</pre><span class="hint">Adresse: ${esc(url)}, Kopfzeile <code>Authorization: Bearer …</code></span></div>
+      <div class="dlg-foot">
+        <button class="btn btn-ghost" data-copy="key">Schlüssel kopieren</button>
+        <button class="btn btn-ghost" data-copy="cmd">Befehl kopieren</button>
+        <button class="btn btn-primary" data-close>Fertig</button>
+      </div>
+    </div>`,
+    (dlg) => {
+      $$('[data-copy]', dlg).forEach((b) => (b.onclick = () => copy(b.dataset.copy === 'key' ? key : cmd)));
+      dlg.addEventListener('close', () => route(), { once: true });
+    }
+  );
+}
+
+const sqlDate = (s) => new Date(s.replace(' ', 'T') + 'Z');
+const fmtWhen = (s) => (s ? `${fmtShort.format(sqlDate(s))}, ${fmtTime.format(sqlDate(s))}` : 'nie');
+
+// MCP-Schlüssel eines Mitarbeiters im Bearbeiten-Dialog (nur Geschäftsführung sieht den Dialog)
+async function mountMcpKeys(dlg, u) {
+  const list = $('[data-key-list]', dlg);
+  const label = $('[data-key-label]', dlg);
+  const addBtn = $('[data-key-add]', dlg);
+
+  const render = async () => {
+    const keys = await api('GET', `/users/${u.id}/mcp-keys`);
+    list.innerHTML = keys.length
+      ? keys
+          .map(
+            (k) => `<li>
+              <span class="key-name">${esc(k.label || 'Ohne Bezeichnung')} <span class="muted">…${esc(k.hint)}</span></span>
+              <span class="small muted">Zuletzt: ${fmtWhen(k.last_used_at)}</span>
+              <button type="button" class="btn btn-danger btn-sm" data-revoke="${k.id}">Widerrufen</button>
+            </li>`
+          )
+          .join('')
+      : `<li class="none small muted">Noch keiner. Mit einem Schlüssel kann ein KI-Agent das Scrum-Board bearbeiten, sonst nichts.</li>`;
+  };
+
+  list.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-revoke]');
+    if (!b) return;
+    // erster Klick fragt, zweiter widerruft
+    if (!b.dataset.armed) {
+      b.dataset.armed = '1';
+      b.textContent = 'Wirklich?';
+      return;
+    }
+    b.disabled = true;
+    try {
+      await del(`/users/${u.id}/mcp-keys/${b.dataset.revoke}`);
+      toast('Schlüssel widerrufen. Der Agent hat ab sofort keinen Zugang mehr.');
+      await render();
+    } catch (ex) {
+      toast(ex.message, true);
+      b.disabled = false;
+    }
+  });
+
+  const add = async () => {
+    addBtn.disabled = true;
+    try {
+      const res = await post(`/users/${u.id}/mcp-keys`, { label: label.value });
+      showMcpKey(u, res.key);
+    } catch (ex) {
+      toast(ex.message, true);
+      addBtn.disabled = false;
+    }
+  };
+  addBtn.addEventListener('click', add);
+  // Enter erstellt den Schlüssel, statt das ganze Formular abzuschicken.
+  label.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      add();
+    }
+  });
+
+  try {
+    await render();
+  } catch (ex) {
+    list.innerHTML = `<li class="none small muted">${esc(ex.message)}</li>`;
+  }
 }
 
 function userDialog(u) {
@@ -1142,6 +1239,18 @@ function userDialog(u) {
           <div class="field"><label for="ur">Rolle</label><select class="select" id="ur" name="role" ${self ? 'disabled' : ''}><option value="user">Belegschaft</option><option value="admin" ${u?.role === 'admin' ? 'selected' : ''}>Geschäftsführung (Admin)</option></select></div>
           ${u ? `<div class="field"><label for="ua">Zugang</label><select class="select" id="ua" name="active" ${self ? 'disabled' : ''}><option value="1">Aktiv</option><option value="0" ${!u.active ? 'selected' : ''}>Deaktiviert</option></select></div>` : ''}
         </div>
+        ${
+          u?.active
+            ? `<section class="subs" aria-label="MCP-Schlüssel">
+                <div class="subs-head"><h3>KI-Agenten (MCP)</h3><span class="small muted">nur Scrum-Board, ohne Löschen</span></div>
+                <ul class="sub-list keys" data-key-list><li class="none small muted">Lädt …</li></ul>
+                <div class="sub-add">
+                  <input class="input" data-key-label maxlength="60" placeholder="Bezeichnung, z. B. Claude Code Laptop" aria-label="Bezeichnung des neuen Schlüssels">
+                  <button type="button" class="btn btn-ghost btn-sm" data-key-add>${I.plus}Schlüssel</button>
+                </div>
+              </section>`
+            : ''
+        }
         <p class="error" role="alert"></p>
       </div>
       <div class="dlg-foot">
@@ -1172,6 +1281,7 @@ function userDialog(u) {
           $('.error', dlg).textContent = ex.message;
         }
       });
+      if (u?.active) mountMcpKeys(dlg, u);
     }
   );
 }
