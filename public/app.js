@@ -1358,6 +1358,38 @@ async function viewProfile(main) {
         <div class="panel-head"><h2>KI-Apps</h2><span class="small muted">nur Scrum-Board</span></div>
         <p class="small muted" style="margin:0 0 12px">ChatGPT, die Claude-App und andere KI-Apps können in deinem Namen das Scrum-Board bearbeiten. Lege in der App einen eigenen Connector (MCP) mit dieser Adresse an und erlaube den Zugriff, wenn du gefragt wirst. Löschen kann die App nichts.</p>
         <div class="copy-row"><code class="code">${esc(location.origin)}/mcp</code><button type="button" class="btn btn-ghost btn-sm" data-copy-url>Kopieren</button></div>
+        <div class="howto">
+          <details>
+            <summary>Claude (Web, Desktop, Handy)</summary>
+            <ol>
+              <li>Auf claude.ai: <b>Customize → Connectors → Add custom connector</b>.</li>
+              <li>Name, z. B. „Bruno-Board“, und die Adresse oben einfügen, <b>Add</b>.</li>
+              <li><b>Connect</b>, hier anmelden und <b>Erlauben</b>.</li>
+            </ol>
+            <p>Gilt danach auch in der Desktop- und Handy-App.</p>
+          </details>
+          <details>
+            <summary>ChatGPT</summary>
+            <ol>
+              <li>In den Einstellungen unter <b>Apps</b> den <b>Developer Mode</b> einschalten.</li>
+              <li>Eine eigene App anlegen: Adresse oben einfügen, Anmeldung <b>OAuth</b>.</li>
+              <li>Hier anmelden und <b>Erlauben</b>.</li>
+            </ol>
+            <p>Developer Mode gibt es nicht in jedem ChatGPT-Tarif, und die Menünamen ändern sich öfter.</p>
+          </details>
+          <details>
+            <summary>Claude Code</summary>
+            <ol>
+              <li>Im Terminal ausführen: <code class="code" data-copy-cmd>claude mcp add --transport http bruno-board ${esc(location.origin)}/mcp</code></li>
+              <li>In Claude Code <b>/mcp</b> eingeben, <b>bruno-board</b> wählen, anmelden und <b>Erlauben</b>.</li>
+            </ol>
+          </details>
+          <details>
+            <summary>Cursor, VS Code, Codex, Gemini CLI</summary>
+            <p>Die Adresse oben als MCP-Server (HTTP) eintragen. Beim ersten Zugriff öffnet sich die Anmeldung, dann <b>Erlauben</b>.</p>
+          </details>
+          <p class="small muted">Die Gemini-App kann keine eigenen Connectoren außerhalb der USA. Hilfe gibt die Geschäftsführung.</p>
+        </div>
         <div class="subs" style="margin-top:16px">
           <div class="subs-head"><h3>Verbunden</h3></div>
           <ul class="sub-list keys" data-conn-list><li class="none small muted">Lädt …</li></ul>
@@ -1370,6 +1402,7 @@ async function viewProfile(main) {
     toast('Passwort gespeichert. Andere Geräte wurden abgemeldet.');
   });
   $('[data-copy-url]', main).onclick = () => copy(`${location.origin}/mcp`);
+  $('[data-copy-cmd]', main).onclick = (e) => copy(e.target.textContent);
   mountConnections($('[data-conn-list]', main), '/me');
 }
 
