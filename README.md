@@ -28,6 +28,56 @@ KI-Agenten (Claude Code, Cursor, …) können über `/mcp` das Scrum-Board bearb
 
 Andere Programme: gleiche Adresse, Kopfzeile `Authorization: Bearer …`. Widerrufen im selben Dialog.
 
+### Einrichten je Programm
+
+| Programm | Geht mit dem Schlüssel? |
+| --- | --- |
+| Claude Code | Ja |
+| Claude App (Web, Desktop, Handy) | Ja, wenn „Request headers“ angeboten wird (Beta). Sonst Claude Desktop über `mcp-remote` |
+| ChatGPT (Web, App) | Nein, ChatGPT kann nur OAuth. Stattdessen Codex CLI |
+| Gemini (Web, App) | Nein, nur OAuth und nur in den USA. Stattdessen Gemini CLI |
+
+In allen Beispielen `<adresse>` und `bsmcp_…` ersetzen.
+
+**Claude Code:** der Befehl oben.
+
+**Claude App:** auf claude.ai **Customize → Connectors → Add custom connector**. URL `https://<adresse>/mcp`, Anmeldung **No sign-in**, unter **Request headers** den Namen `authorization` und als Wert `Bearer bsmcp_…` (mit „Bearer “). Gilt danach auch in der Desktop- und Handy-App. Bei Team/Enterprise legt das die Organisation an, dann teilen sich alle einen Schlüssel.
+
+**Claude Desktop ohne „Request headers“:** braucht [Node.js](https://nodejs.org). **Settings → Developer → Edit Config**, eintragen und Claude neu starten:
+
+```json
+{
+  "mcpServers": {
+    "bruno-board": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://<adresse>/mcp", "--header", "Authorization:${AUTH}"],
+      "env": { "AUTH": "Bearer bsmcp_…" }
+    }
+  }
+}
+```
+
+**Codex CLI (OpenAI):** in `~/.codex/config.toml` eintragen und den Schlüssel als Umgebungsvariable `BRUNO_MCP_KEY` setzen (nur `bsmcp_…`, ohne „Bearer“):
+
+```toml
+[mcp_servers.bruno-board]
+url = "https://<adresse>/mcp"
+bearer_token_env_var = "BRUNO_MCP_KEY"
+```
+
+**Gemini CLI:** in `~/.gemini/settings.json` eintragen:
+
+```json
+{
+  "mcpServers": {
+    "bruno-board": {
+      "httpUrl": "https://<adresse>/mcp",
+      "headers": { "Authorization": "Bearer bsmcp_…" }
+    }
+  }
+}
+```
+
 ## Online stellen (ca. 10 Minuten)
 
 Voraussetzungen: [Node.js](https://nodejs.org) ab Version 20 und dein Cloudflare-Account (der, in dem vasica.de liegt).
