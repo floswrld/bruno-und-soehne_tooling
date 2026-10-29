@@ -57,11 +57,13 @@ a:hover { color: var(--bordeaux-deep); }
 
 /* ---------- Grundgerüst ---------- */
 
-.shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
+/* 100dvh = tatsächlich sichtbare Höhe. Safari auf dem iPhone rechnet 100vh hinter die
+   Adressleiste, dann lässt sich jede Seite ein Stück nach unten scrollen. 100vh bleibt als Rückfall. */
+.shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; min-height: 100dvh; }
 
 .side { background: var(--ink); color: #EDE6E2; }
 .side-in {
-  position: sticky; top: 0; height: 100vh;
+  position: sticky; top: 0; height: 100vh; height: 100dvh;
   display: flex; flex-direction: column;
   padding: 28px 18px 22px;
   gap: 28px;
@@ -119,7 +121,7 @@ a:hover { color: var(--bordeaux-deep); }
 .topbar, .tabbar { display: none; }
 
 @media (max-width: 880px) {
-  .shell { grid-template-columns: 1fr; }
+  .shell { grid-template-columns: minmax(0, 1fr); }
   .side { display: none; }
   .topbar {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -153,8 +155,9 @@ a:hover { color: var(--bordeaux-deep); }
 .small { font-size: 13px; }
 
 .grid { display: grid; gap: 20px; }
+.grid > * { min-width: 0; } /* Inhalte dürfen schrumpfen, statt die Spalte über den Bildschirm zu drücken */
 .grid-dash { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
-@media (max-width: 1100px) { .grid-dash { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .grid-dash { grid-template-columns: minmax(0, 1fr); } }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -181,8 +184,10 @@ a:hover { color: var(--bordeaux-deep); }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
 .field .hint { font-size: 12.5px; color: var(--muted); }
+/* Mindestens 16px: Bei kleinerer Schrift zoomt Safari auf dem iPhone beim Antippen hinein
+   und nicht wieder heraus. Danach ist die ganze App etwas zu breit. */
 .input, .select, .textarea {
-  width: 100%; min-height: 44px; padding: 10px 14px;
+  width: 100%; min-height: 44px; padding: 10px 14px; font-size: 16px;
   background: #fff; border: 1px solid var(--line-strong); border-radius: var(--r-md);
   transition: border-color .15s, box-shadow .15s;
 }
@@ -287,6 +292,7 @@ td .person span { display: block; font-size: 13px; color: var(--muted); }
 
 .weeknav { display: flex; align-items: center; gap: 8px; }
 .weeknav .label { font-weight: 600; min-width: 170px; text-align: center; font-variant-numeric: tabular-nums; }
+@media (max-width: 380px) { .weeknav .label { min-width: 0; } }
 .weeknav .icon-btn { border: 1px solid var(--line-strong); }
 .weeknav .icon-btn:hover { background: rgba(28, 20, 22, .05); }
 
@@ -382,7 +388,7 @@ td .person span { display: block; font-size: 13px; color: var(--muted); }
 
 /* ---------- Login ---------- */
 
-.auth { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+.auth { min-height: 100vh; min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
 .auth-art {
   position: relative; overflow: hidden;
   background: var(--bordeaux); color: var(--brass-light);
