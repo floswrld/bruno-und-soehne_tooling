@@ -471,3 +471,14 @@ dialog[open] { animation: rise .22s var(--ease); }
 
 .copy-row { display: flex; align-items: center; gap: 8px; }
 .copy-row .code { flex: 1; min-width: 0; padding: 8px 12px; white-space: nowrap; overflow-x: auto; }
+
+/* Kurzanleitung je KI-App im Profil */
+.howto { margin-top: 12px; }
+.howto details { border-top: 1px solid var(--line); padding: 10px 0; }
+.howto details:last-of-type { border-bottom: 1px solid var(--line); }
+.howto summary { cursor: pointer; font-weight: 600; }
+.howto summary:hover { color: var(--bordeaux); }
+.howto ol { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px; }
+.howto p { margin: 8px 0 0; font-size: 14px; }
+.howto details p { color: var(--muted); }
+.howto .code { display: block; margin-top: 4px; padding: 6px 10px; cursor: copy; word-break: normal; overflow-wrap: anywhere; }
