@@ -1,6 +1,9 @@
 import { Hono, type Context, type Next } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { hashPassword, verifyPassword, DUMMY_HASH, newToken, sha256Hex, tempPassword } from './crypto';
+import { HttpError, fail, str, int } from './util';
+import { listTasks, createTask, updateTask } from './tasks';
+import { mcpUser, handleMcp, MCP_KEY_PREFIX } from './mcp';
 
 type Env = {
   DB: D1Database;
@@ -25,21 +28,11 @@ type C = Context<{ Bindings: Env; Variables: Vars }>;
 const COOKIE = 'bs_session';
 const SESSION_DAYS = 30;
 const MAX_FAILURES = 8; // pro Benutzername in 15 Minuten
-const STATUSES = ['backlog', 'todo', 'doing', 'review', 'done'] as const;
 const USER_COLS = 'id, username, display_name, title, role, must_change_password, active, created_at';
 
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 // ---------- Hilfsfunktionen ----------
-
-class HttpError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
-}
-const fail = (status: number, message: string): never => {
-  throw new HttpError(status, message);
-};
 
 app.onError((err, c) => {
   if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
@@ -53,25 +46,6 @@ async function body<T = Record<string, unknown>>(c: C): Promise<T> {
   } catch {
     return fail(400, 'Ungültige Anfrage.');
   }
-}
-
-function str(v: unknown, field: string, { min = 1, max = 200, optional = false } = {}): string {
-  if (v === undefined || v === null) {
-    if (optional) return '';
-    return fail(400, `${field} fehlt.`);
-  }
-  if (typeof v !== 'string') return fail(400, `${field} muss Text sein.`);
-  const s = v.trim();
-  if (s.length < min) return fail(400, `${field} ist zu kurz (mindestens ${min} Zeichen).`);
-  if (s.length > max) return fail(400, `${field} ist zu lang (höchstens ${max} Zeichen).`);
-  return s;
-}
-
-function int(v: unknown, field: string): number | null {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Number(v);
-  if (!Number.isInteger(n)) return fail(400, `${field} muss eine ganze Zahl sein.`);
-  return n;
 }
 
 function iso(v: unknown, field: string): string {
@@ -299,6 +273,44 @@ app.post('/api/users/:id/reset-password', async (c) => {
   return c.json({ temp_password: pw });
 });
 
+// MCP-Schlüssel: KI-Agenten dürfen damit im Namen des Mitarbeiters nur das Scrum-Board bearbeiten.
+// Anlegen, ansehen und widerrufen darf nur die Geschäftsführung.
+
+app.get('/api/users/:id/mcp-keys', async (c) => {
+  adminOnly(c);
+  const { results } = await c.env.DB.prepare(
+    `SELECT k.id, k.label, k.hint, k.created_at, k.last_used_at, u.display_name AS created_by_name
+     FROM mcp_keys k LEFT JOIN users u ON u.id = k.created_by WHERE k.user_id = ? ORDER BY k.created_at DESC`
+  )
+    .bind(Number(c.req.param('id')))
+    .all();
+  return c.json(results);
+});
+
+app.post('/api/users/:id/mcp-keys', async (c) => {
+  adminOnly(c);
+  const id = Number(c.req.param('id'));
+  const u = await c.env.DB.prepare('SELECT active FROM users WHERE id = ?').bind(id).first<{ active: number }>();
+  if (!u) fail(404, 'Mitarbeiter nicht gefunden.');
+  if (!u!.active) fail(400, 'Deaktivierte Mitarbeiter bekommen keinen Schlüssel.');
+  const b = await body(c);
+  const label = str(b.label, 'Bezeichnung', { min: 0, max: 60, optional: true });
+  const key = MCP_KEY_PREFIX + newToken();
+  await c.env.DB.prepare('INSERT INTO mcp_keys (user_id, key_hash, hint, label, created_by) VALUES (?, ?, ?, ?, ?)')
+    .bind(id, await sha256Hex(key), key.slice(-4), label, c.get('user').id)
+    .run();
+  return c.json({ key }, 201); // wird nur jetzt einmal angezeigt
+});
+
+app.delete('/api/users/:id/mcp-keys/:keyId', async (c) => {
+  adminOnly(c);
+  const res = await c.env.DB.prepare('DELETE FROM mcp_keys WHERE id = ? AND user_id = ?')
+    .bind(Number(c.req.param('keyId')), Number(c.req.param('id')))
+    .run();
+  if (!res.meta.changes) fail(404, 'Schlüssel nicht gefunden.');
+  return c.json({ ok: true });
+});
+
 // ---------- Zeiterfassung ----------
 
 type Entry = { id: number; user_id: number; started_at: string; ended_at: string | null; note: string; task_id: number | null };
@@ -471,138 +483,20 @@ app.patch('/api/sprints/:id', async (c) => {
 });
 
 // ---------- Aufgaben (Scrum-Board) ----------
-
-type Task = {
-  id: number;
-  title: string;
-  description: string;
-  status: (typeof STATUSES)[number];
-  assignee_id: number | null;
-  sprint_id: number | null;
-  position: number;
-  parent_id: number | null;
-  created_by: number | null;
-};
+// Die Regeln stehen in tasks.ts und gelten genauso für den MCP-Zugang.
 
 app.get('/api/tasks', async (c) => {
-  const sprint = c.req.query('sprint');
-  const parent = c.req.query('parent');
-  const where: string[] = [];
-  const binds: unknown[] = [];
-  if (sprint === 'none') where.push('t.sprint_id IS NULL');
-  else if (sprint) {
-    where.push('t.sprint_id = ?');
-    binds.push(Number(sprint));
-  }
-  if (parent) {
-    where.push('t.parent_id = ?');
-    binds.push(Number(parent));
-  }
-  const { results } = await c.env.DB.prepare(
-    `SELECT t.*, u.display_name AS assignee_name, p.title AS parent_title,
-       (SELECT COUNT(*) FROM tasks s WHERE s.parent_id = t.id) AS sub_total,
-       (SELECT COUNT(*) FROM tasks s WHERE s.parent_id = t.id AND s.status = 'done') AS sub_done
-     FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id LEFT JOIN tasks p ON p.id = t.parent_id
-     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY t.position, t.id`
-  )
-    .bind(...binds)
-    .all();
-  return c.json(results);
+  const parent = Number(c.req.query('parent')) || undefined;
+  return c.json(await listTasks(c.env.DB, { sprint: c.req.query('sprint'), parent }));
 });
 
-// Übergeordnete Aufgabe prüfen: muss existieren und darf selbst keine Teilaufgabe sein (nur eine Ebene).
-async function parentTask(db: D1Database, pid: number | null, selfId?: number): Promise<Task | null> {
-  if (pid === null) return null;
-  if (pid === selfId) fail(400, 'Eine Aufgabe kann nicht ihre eigene Teilaufgabe sein.');
-  const p = await db.prepare('SELECT * FROM tasks WHERE id = ?').bind(pid).first<Task>();
-  if (!p) fail(404, 'Übergeordnete Aufgabe nicht gefunden.');
-  if (p!.parent_id) fail(400, 'Teilaufgaben können keine eigenen Teilaufgaben haben.');
-  return p!;
-}
-
-async function openSubtasks(db: D1Database, id: number): Promise<number> {
-  const r = await db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE parent_id = ? AND status != 'done'`).bind(id).first<{ n: number }>();
-  return r?.n ?? 0;
-}
-
-// Eine erledigte Aufgabe mit offener Teilaufgabe ist nicht erledigt: zurück in Arbeit.
-const reopenTask = (db: D1Database, id: number) =>
-  db.prepare(`UPDATE tasks SET status = 'doing', updated_at = datetime('now') WHERE id = ?`).bind(id);
-
-function status(v: unknown): string {
-  if (!STATUSES.includes(v as (typeof STATUSES)[number])) return fail(400, 'Unbekannte Spalte.');
-  return v as string;
-}
-
 app.post('/api/tasks', async (c) => {
-  const me = c.get('user');
-  const b = await body(c);
-  const title = str(b.title, 'Titel', { max: 140 });
-  const desc = str(b.description, 'Beschreibung', { min: 0, max: 4000, optional: true });
-  const st = b.status !== undefined ? status(b.status) : 'backlog';
-  const db = c.env.DB;
-  const parent = await parentTask(db, int(b.parent_id, 'Übergeordnete Aufgabe'));
-  // Teilaufgaben laufen immer im Sprint ihrer übergeordneten Aufgabe.
-  const sprint = parent ? parent.sprint_id : int(b.sprint_id, 'Sprint');
-  const max = await db.prepare('SELECT COALESCE(MAX(position), 0) AS p FROM tasks WHERE status = ?').bind(st).first<{ p: number }>();
-  const stmts = [
-    db
-      .prepare(
-        'INSERT INTO tasks (title, description, status, assignee_id, sprint_id, position, parent_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .bind(title, desc, st, int(b.assignee_id, 'Zuständig'), sprint, (max?.p ?? 0) + 1, parent?.id ?? null, me.id),
-  ];
-  const reopen = parent?.status === 'done' && st !== 'done';
-  if (reopen) stmts.push(reopenTask(db, parent!.id));
-  const res = await db.batch(stmts);
-  return c.json({ id: res[0].meta.last_row_id, reopened: reopen ? parent!.id : null }, 201);
+  return c.json(await createTask(c.env.DB, c.get('user').id, await body(c)), 201);
 });
 
 app.patch('/api/tasks/:id', async (c) => {
-  const db = c.env.DB;
-  const id = Number(c.req.param('id'));
-  const t = await db.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first<Task>();
-  if (!t) fail(404, 'Aufgabe nicht gefunden.');
-  const b = await body(c);
-  const next = {
-    title: b.title !== undefined ? str(b.title, 'Titel', { max: 140 }) : t!.title,
-    description: b.description !== undefined ? str(b.description, 'Beschreibung', { min: 0, max: 4000, optional: true }) : t!.description,
-    status: b.status !== undefined ? status(b.status) : t!.status,
-    assignee_id: b.assignee_id !== undefined ? int(b.assignee_id, 'Zuständig') : t!.assignee_id,
-    sprint_id: b.sprint_id !== undefined ? int(b.sprint_id, 'Sprint') : t!.sprint_id,
-    position: b.position !== undefined ? Number(b.position) : t!.position,
-    parent_id: b.parent_id !== undefined ? int(b.parent_id, 'Übergeordnete Aufgabe') : t!.parent_id,
-  };
-  if (!Number.isFinite(next.position)) fail(400, 'Ungültige Position.');
-
-  const parent = await parentTask(db, next.parent_id, id);
-  if (parent && next.parent_id !== t!.parent_id && (await db.prepare('SELECT 1 FROM tasks WHERE parent_id = ? LIMIT 1').bind(id).first())) {
-    fail(400, 'Diese Aufgabe hat eigene Teilaufgaben und kann keine Teilaufgabe werden.');
-  }
-  if (parent) next.sprint_id = parent.sprint_id;
-  if (next.status === 'done' && t!.status !== 'done') {
-    const open = await openSubtasks(db, id);
-    if (open) fail(409, `Erst alle Teilaufgaben erledigen. ${open === 1 ? 'Eine ist' : `${open} sind`} noch offen.`);
-  }
-
-  const stmts = [
-    db
-      .prepare(
-        `UPDATE tasks SET title = ?, description = ?, status = ?, assignee_id = ?, sprint_id = ?, position = ?, parent_id = ?,
-         updated_at = datetime('now') WHERE id = ?`
-      )
-      .bind(next.title, next.description, next.status, next.assignee_id, next.sprint_id, next.position, next.parent_id, id),
-  ];
-  // Teilaufgaben ziehen mit, wenn die Aufgabe den Sprint wechselt.
-  if (next.sprint_id !== t!.sprint_id) stmts.push(db.prepare('UPDATE tasks SET sprint_id = ? WHERE parent_id = ?').bind(next.sprint_id, id));
-  const reopen = parent?.status === 'done' && next.status !== 'done';
-  if (reopen) stmts.push(reopenTask(db, parent!.id));
-  await db.batch(stmts);
-
-  // Letzte offene Teilaufgabe erledigt? Dann darf die übergeordnete Aufgabe nach „Erledigt“.
-  const parentReady =
-    parent && parent.status !== 'done' && next.status === 'done' && t!.status !== 'done' && !(await openSubtasks(db, parent.id));
-  return c.json({ ok: true, reopened: reopen ? parent!.id : null, parent_ready: parentReady ? parent!.id : null });
+  const res = await updateTask(c.env.DB, Number(c.req.param('id')), await body(c));
+  return c.json({ ok: true, ...res });
 });
 
 app.delete('/api/tasks/:id', async (c) => {
@@ -619,6 +513,23 @@ app.delete('/api/tasks/:id', async (c) => {
 });
 
 app.all('/api/*', (c) => c.json({ error: 'Unbekannter Endpunkt.' }, 404));
+
+// ---------- MCP für KI-Agenten (nur Scrum-Board) ----------
+// Eigener Zugang per Bearer-Schlüssel. Sitzungs-Cookies gelten hier nicht, MCP-Schlüssel nicht unter /api.
+
+app.all('/mcp', async (c) => {
+  // Browser dürfen den Endpunkt nicht von fremden Seiten aus ansprechen (DNS-Rebinding).
+  const origin = c.req.header('origin');
+  if (origin && new URL(origin).host !== new URL(c.req.url).host) return c.json({ error: 'Fremde Herkunft abgelehnt.' }, 403);
+  const user = await mcpUser(c.env.DB, c.req.header('authorization'));
+  if (!user) {
+    return c.json({ error: 'Gültiger MCP-Schlüssel fehlt.' }, 401, { 'WWW-Authenticate': 'Bearer realm="Bruno & Söhne Scrum-Board"' });
+  }
+  c.executionCtx.waitUntil(
+    c.env.DB.prepare(`UPDATE mcp_keys SET last_used_at = datetime('now') WHERE id = ?`).bind(user.key_id).run()
+  );
+  return handleMcp(c.req.raw, c.env.DB, user);
+});
 
 // Alles andere: die Single-Page-App
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
