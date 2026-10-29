@@ -23,7 +23,7 @@ KI-Agenten (Claude Code, Cursor, …) können über `/mcp` das Scrum-Board bearb
 2. Den angezeigten Befehl ausführen (der Schlüssel erscheint nur einmal):
 
    ```bash
-   claude mcp add --transport http bruno-board https://<deine-adresse>/mcp --header "Authorization: Bearer bsmcp_…"
+   claude mcp add --transport http bruno-board https://<adresse>/mcp --header "Authorization: Bearer bsmcp_…"
    ```
 
 Andere Programme: gleiche Adresse, Kopfzeile `Authorization: Bearer …`. Widerrufen im selben Dialog.
