@@ -607,7 +607,8 @@ async function viewBoard(main) {
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   const sprints = await api('GET', '/sprints');
   const active = sprints.find((s) => s.active);
-  const sel = params.get('s') || (active ? String(active.id) : '');
+  // ohne s: aktiver Sprint; s leer: bewusst „Alle Aufgaben“
+  const sel = params.has('s') ? params.get('s') : active ? String(active.id) : '';
   const who = params.get('u') || ''; // '' = alle, 'none' = niemand zugewiesen, sonst Benutzer-ID
   const go = (s, u) => (location.hash = `#/board?s=${s}${u ? `&u=${u}` : ''}`);
   const tasks = await api('GET', '/tasks' + (sel ? `?sprint=${sel}` : ''));
