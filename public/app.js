@@ -401,8 +401,8 @@ async function viewDashboard(main) {
           <div class="panel-head"><h2>Meine Aufgaben</h2><a href="#/board" class="small">Zum Board</a></div>
           ${
             mine.length
-              ? `<div class="table-wrap"><table><thead><tr><th>Aufgabe</th><th>Spalte</th><th class="num">Punkte</th></tr></thead><tbody>${mine
-                  .map((t) => `<tr><td><b>${esc(t.title)}</b> <span class="muted small">#${t.id}${t.parent_id ? ` · Teil von #${t.parent_id}` : ''}</span></td><td><span class="chip">${statusName[t.status]}</span></td><td class="num">${t.points ?? '–'}</td></tr>`)
+              ? `<div class="table-wrap"><table><thead><tr><th>Aufgabe</th><th>Spalte</th></tr></thead><tbody>${mine
+                  .map((t) => `<tr><td><b>${esc(t.title)}</b> <span class="muted small">#${t.id}${t.parent_id ? ` · Teil von #${t.parent_id}` : ''}</span></td><td><span class="chip">${statusName[t.status]}</span></td></tr>`)
                   .join('')}</tbody></table></div>`
               : `<div class="empty"><b>Nichts zugewiesen.</b>Nimm dir eine Aufgabe vom Board, bevor es jemand bemerkt.</div>`
           }
@@ -608,11 +608,15 @@ async function viewBoard(main) {
   const sprints = await api('GET', '/sprints');
   const active = sprints.find((s) => s.active);
   const sel = params.get('s') || (active ? String(active.id) : '');
+  const who = params.get('u') || ''; // '' = alle, 'none' = niemand zugewiesen, sonst Benutzer-ID
+  const go = (s, u) => (location.hash = `#/board?s=${s}${u ? `&u=${u}` : ''}`);
   const tasks = await api('GET', '/tasks' + (sel ? `?sprint=${sel}` : ''));
   const sprint = sprints.find((s) => String(s.id) === sel);
   const isAdmin = state.me.role === 'admin';
-  const points = tasks.reduce((a, t) => a + (t.points || 0), 0);
-  const donePts = tasks.filter((t) => t.status === 'done').reduce((a, t) => a + (t.points || 0), 0);
+  // Der Filter blendet nur Karten aus; Dialoge sehen weiter alle Aufgaben des Sprints.
+  const visible = tasks.filter((t) => !who || (who === 'none' ? !t.assignee_id : t.assignee_id === Number(who)));
+  const doneCount = visible.filter((t) => t.status === 'done').length;
+  const workers = state.users.filter((u) => u.active || tasks.some((t) => t.assignee_id === u.id));
 
   // Aufgabe und Teilaufgaben bilden eine Familie, benannt nach der übergeordneten Aufgabe.
   const family = (t) => t.parent_id || (t.sub_total ? t.id : '');
@@ -623,7 +627,7 @@ async function viewBoard(main) {
       <span class="t">${esc(t.title)}</span>
       ${t.sub_total ? progress(t.sub_done, t.sub_total) : ''}
       <span class="meta">
-        <span style="display:flex;gap:8px;align-items:center"><span class="key">#${t.id}</span>${t.points != null ? `<span class="pts">${t.points}</span>` : ''}</span>
+        <span class="key">#${t.id}</span>
         ${t.assignee_id ? `<span class="avatar sm" title="${esc(t.assignee_name)}">${esc(initials(t.assignee_name))}</span>` : '<span class="nobody" title="Niemand zugewiesen"></span>'}
       </span>
     </button>`;
@@ -642,16 +646,21 @@ async function viewBoard(main) {
         ${sprints.map((s) => `<option value="${s.id}" ${String(s.id) === sel ? 'selected' : ''}>${esc(s.name)}${s.active ? ' (aktiv)' : ''}</option>`).join('')}
         <option value="none" ${sel === 'none' ? 'selected' : ''}>Ohne Sprint</option>
       </select>
+      <select class="select" data-who aria-label="Nach Mitarbeiter filtern">
+        <option value="">Alle Mitarbeiter</option>
+        ${workers.map((u) => `<option value="${u.id}" ${String(u.id) === who ? 'selected' : ''}>${esc(u.display_name)}${u.id === state.me.id ? ' (ich)' : ''}</option>`).join('')}
+        <option value="none" ${who === 'none' ? 'selected' : ''}>Niemand zugewiesen</option>
+      </select>
       <div class="sprint-goal">${
         sprint
           ? `<b>${fmtShort.format(new Date(sprint.starts_on))} bis ${fmtShort.format(new Date(sprint.ends_on))}</b>${sprint.goal ? `&ensp;${esc(sprint.goal)}` : ''}`
           : ''
       }</div>
-      <span class="chip ok num">${donePts} / ${points} Punkte erledigt</span>
+      <span class="chip ok num">${doneCount} / ${visible.length} erledigt</span>
     </div>
     <div class="board">
       ${COLUMNS.map(([k, name]) => {
-        const list = tasks.filter((t) => t.status === k);
+        const list = visible.filter((t) => t.status === k);
         return `<section class="col" data-status="${k}" aria-label="${name}">
           <div class="col-head"><h2>${name}</h2><span class="count">${list.length}</span></div>
           <div class="col-list">${list.map(card).join('')}</div>
@@ -660,8 +669,11 @@ async function viewBoard(main) {
       }).join('')}
     </div>`;
 
-  $('[data-sprint]', main).onchange = (e) => (location.hash = `#/board?s=${e.target.value}`);
-  $$('[data-new]', main).forEach((b) => (b.onclick = () => taskDialog(null, b.dataset.new, sprints, sel, tasks)));
+  $('[data-sprint]', main).onchange = (e) => go(e.target.value, who);
+  $('[data-who]', main).onchange = (e) => go(sel, e.target.value);
+  // Neue Aufgaben bekommen den gefilterten Mitarbeiter, damit sie nicht gleich verschwinden.
+  const filterAssignee = who && who !== 'none' ? Number(who) : null;
+  $$('[data-new]', main).forEach((b) => (b.onclick = () => taskDialog(null, b.dataset.new, sprints, sel, tasks, filterAssignee)));
   $('[data-sprint-new]', main)?.addEventListener('click', () => sprintDialog(null));
   $('[data-sprint-edit]', main)?.addEventListener('click', () => sprintDialog(sprint));
   $$('.card', main).forEach((c) => (c.onclick = () => taskDialog(tasks.find((t) => t.id === Number(c.dataset.id)), null, sprints, sel, tasks)));
@@ -673,17 +685,147 @@ async function viewBoard(main) {
     c.addEventListener('mouseleave', () => kin(false));
   });
 
-  // Drag & Drop
+  // Drag & Drop: mit der Maus über HTML5, per Finger über langes Drücken (siehe unten)
   let dragId = null;
+
+  async function dropOn(col, clientY) {
+    const status = col.dataset.status;
+    const dragged = tasks.find((t) => t.id === dragId);
+    if (status === 'done' && dragged.status !== 'done' && dragged.sub_done < dragged.sub_total) {
+      toast(`Erst alle Teilaufgaben erledigen (${dragged.sub_done}/${dragged.sub_total}).`, true);
+      return;
+    }
+    const others = $$('.card', col).filter((c) => Number(c.dataset.id) !== dragId);
+    const pos = (id) => tasks.find((t) => t.id === Number(id)).position;
+    const after = others.findIndex((c) => clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
+    let position;
+    if (!others.length) position = 1;
+    else if (after === -1) position = pos(others.at(-1).dataset.id) + 1;
+    else if (after === 0) position = pos(others[0].dataset.id) - 1;
+    else position = (pos(others[after - 1].dataset.id) + pos(others[after].dataset.id)) / 2;
+
+    // sofort umhängen, dann speichern
+    const el = $(`.card[data-id="${dragId}"]`, main);
+    const listEl = $('.col-list', col);
+    after === -1 ? listEl.append(el) : listEl.insertBefore(el, others[after]);
+    try {
+      const res = await patch(`/tasks/${dragId}`, { status, position });
+      if (status === 'done') toast('Erledigt. Bruno ist (fast) zufrieden.');
+      taskNotice(res);
+    } catch (ex) {
+      toast(ex.message, true);
+    }
+    route();
+  }
+
+  // Handys kennen kein HTML5-Drag & Drop. Langes Drücken hebt die Karte an, danach folgt sie
+  // dem Finger. Ein kurzer Wisch scrollt weiterhin ganz normal.
+  const board = $('.board', main);
+  const touch = { timer: 0, card: null, start: null, finger: null, offset: null, ghost: null, over: null, frame: 0, moved: false };
+
+  const follow = () => {
+    const { x, y } = touch.finger;
+    touch.ghost.style.transform = `translate(${x - touch.offset.x}px, ${y - touch.offset.y}px) rotate(2deg)`;
+    // Zwischen den Spalten und im Rand (wo man zum Scrollen hält) bleibt die letzte Spalte das Ziel.
+    const col = document.elementFromPoint(x, y)?.closest('.col');
+    if (!col || col === touch.over) return;
+    touch.over?.classList.remove('over');
+    col?.classList.add('over');
+    touch.over = col;
+  };
+  // Am Rand entlang: Board seitlich, Seite nach oben oder unten weiterschieben
+  const autoScroll = () => {
+    if (touch.moved) {
+      const { x, y } = touch.finger;
+      const b = board.getBoundingClientRect();
+      if (x < b.left + 48) board.scrollLeft -= 12;
+      else if (x > b.right - 48) board.scrollLeft += 12;
+      if (y < 80) window.scrollBy(0, -12);
+      else if (y > innerHeight - 110) window.scrollBy(0, 12);
+      follow();
+    }
+    touch.frame = requestAnimationFrame(autoScroll);
+  };
+  const lift = () => {
+    const c = touch.card;
+    const r = c.getBoundingClientRect();
+    dragId = Number(c.dataset.id);
+    touch.offset = { x: touch.start.x - r.left, y: touch.start.y - r.top };
+    touch.ghost = c.cloneNode(true);
+    touch.ghost.classList.add('ghost');
+    touch.ghost.style.width = r.width + 'px';
+    document.body.append(touch.ghost);
+    c.classList.add('dragging');
+    board.style.scrollSnapType = 'none'; // sonst schnappt das Board beim Seitwärtsschieben zurück
+    navigator.vibrate?.(12);
+    follow();
+    touch.frame = requestAnimationFrame(autoScroll);
+  };
+  // Räumt auf und liefert die Zielspalte, falls die Karte wirklich gezogen wurde.
+  const endTouch = () => {
+    clearTimeout(touch.timer);
+    cancelAnimationFrame(touch.frame);
+    const target = touch.ghost && touch.moved ? touch.over : null;
+    touch.ghost?.remove();
+    touch.over?.classList.remove('over');
+    touch.card?.classList.remove('dragging');
+    board.style.scrollSnapType = '';
+    Object.assign(touch, { timer: 0, card: null, ghost: null, over: null, frame: 0, moved: false });
+    return target;
+  };
+
   $$('.card', main).forEach((c) => {
     c.addEventListener('dragstart', (e) => {
+      // Manche Handys starten beim langen Drücken auch HTML5-Drag. Das übernimmt hier der Touch-Code.
+      if (touch.card) return e.preventDefault();
       dragId = Number(c.dataset.id);
       c.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', String(dragId));
     });
     c.addEventListener('dragend', () => c.classList.remove('dragging'));
+
+    c.addEventListener(
+      'touchstart',
+      (e) => {
+        if (e.touches.length !== 1) return endTouch();
+        const p = e.touches[0];
+        touch.card = c;
+        touch.start = touch.finger = { x: p.clientX, y: p.clientY };
+        touch.timer = setTimeout(lift, 350);
+      },
+      { passive: true }
+    );
+    c.addEventListener(
+      'touchmove',
+      (e) => {
+        if (!touch.card) return;
+        const p = e.touches[0];
+        touch.finger = { x: p.clientX, y: p.clientY };
+        if (!touch.ghost) {
+          // Bewegung vor dem Anheben war ein Wisch zum Scrollen
+          if (Math.hypot(p.clientX - touch.start.x, p.clientY - touch.start.y) > 8) endTouch();
+          return;
+        }
+        e.preventDefault(); // Seite nicht mitscrollen, solange die Karte am Finger hängt
+        touch.moved = true;
+        follow();
+      },
+      { passive: false }
+    );
+    c.addEventListener('touchend', (e) => {
+      const lifted = !!touch.ghost;
+      const y = touch.finger?.y;
+      const target = endTouch();
+      if (!lifted) return;
+      e.preventDefault(); // kein Klick hinterher, der den Dialog öffnet
+      if (target) dropOn(target, y);
+      else dragId = null;
+    });
+    c.addEventListener('touchcancel', endTouch);
+    c.addEventListener('contextmenu', (e) => touch.card && e.preventDefault());
   });
+
   $$('.col', main).forEach((col) => {
     col.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -692,44 +834,19 @@ async function viewBoard(main) {
     col.addEventListener('dragleave', (e) => {
       if (!col.contains(e.relatedTarget)) col.classList.remove('over');
     });
-    col.addEventListener('drop', async (e) => {
+    col.addEventListener('drop', (e) => {
       e.preventDefault();
       col.classList.remove('over');
-      if (!dragId) return;
-      const status = col.dataset.status;
-      const dragged = tasks.find((t) => t.id === dragId);
-      if (status === 'done' && dragged.status !== 'done' && dragged.sub_done < dragged.sub_total) {
-        toast(`Erst alle Teilaufgaben erledigen (${dragged.sub_done}/${dragged.sub_total}).`, true);
-        return;
-      }
-      const others = $$('.card', col).filter((c) => Number(c.dataset.id) !== dragId);
-      const pos = (id) => tasks.find((t) => t.id === Number(id)).position;
-      const after = others.findIndex((c) => e.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2);
-      let position;
-      if (!others.length) position = 1;
-      else if (after === -1) position = pos(others.at(-1).dataset.id) + 1;
-      else if (after === 0) position = pos(others[0].dataset.id) - 1;
-      else position = (pos(others[after - 1].dataset.id) + pos(others[after].dataset.id)) / 2;
-
-      // sofort umhängen, dann speichern
-      const el = $(`.card[data-id="${dragId}"]`, main);
-      const listEl = $('.col-list', col);
-      after === -1 ? listEl.append(el) : listEl.insertBefore(el, others[after]);
-      try {
-        const res = await patch(`/tasks/${dragId}`, { status, position });
-        if (status === 'done') toast('Erledigt. Bruno ist (fast) zufrieden.');
-        taskNotice(res);
-      } catch (ex) {
-        toast(ex.message, true);
-      }
-      route();
+      if (dragId) dropOn(col, e.clientY);
     });
   });
 }
 
-function taskDialog(task, status, sprints, selSprint, tasks) {
+// Die Spalte wird nur per Drag & Drop geändert; neue Aufgaben landen in der Spalte, aus der sie angelegt wurden.
+function taskDialog(task, status, sprints, selSprint, tasks, defaultAssignee = null) {
   const users = state.users.filter((u) => u.active);
   const defaultSprint = task ? task.sprint_id : selSprint && selSprint !== 'none' ? Number(selSprint) : null;
+  const assignee = task ? task.assignee_id : defaultAssignee;
   const canDelete = task && (task.created_by === state.me.id || state.me.role === 'admin');
   const isSub = !!task?.parent_id;
   let subs = task && !isSub ? tasks.filter((t) => t.parent_id === task.id) : [];
@@ -760,14 +877,8 @@ function taskDialog(task, status, sprints, selSprint, tasks) {
                 .join('')}</select></div>`
         }
         <div class="form-row">
-          <div class="field"><label for="ts">Spalte</label><select class="select" id="ts" name="status">${COLUMNS.map(([k, n]) => `<option value="${k}" ${(task?.status ?? status) === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
-          <div class="field"><label for="tp">Story Points</label><select class="select" id="tp" name="points"><option value="">Keine</option>${[1, 2, 3, 5, 8, 13, 21]
-            .map((p) => `<option ${task?.points === p ? 'selected' : ''}>${p}</option>`)
-            .join('')}</select></div>
-        </div>
-        <div class="form-row">
           <div class="field"><label for="ta">Zuständig</label><select class="select" id="ta" name="assignee_id"><option value="">Niemand</option>${users
-            .map((u) => `<option value="${u.id}" ${task?.assignee_id === u.id ? 'selected' : ''}>${esc(u.display_name)}</option>`)
+            .map((u) => `<option value="${u.id}" ${assignee === u.id ? 'selected' : ''}>${esc(u.display_name)}</option>`)
             .join('')}</select></div>
           <div class="field"><label for="tsp">Sprint</label><select class="select" id="tsp" name="sprint_id"><option value="">Ohne Sprint</option>${sprints
             .map((s) => `<option value="${s.id}" ${defaultSprint === s.id ? 'selected' : ''}>${esc(s.name)}</option>`)
@@ -797,8 +908,8 @@ function taskDialog(task, status, sprints, selSprint, tasks) {
     </form>`,
     (dlg) => {
       bindForm($('form', dlg), async (d) => {
-        const body = { ...d, points: d.points || null, assignee_id: d.assignee_id || null, sprint_id: d.sprint_id || null, parent_id: d.parent_id || null };
-        const res = task ? await patch(`/tasks/${task.id}`, body) : await post('/tasks', body);
+        const body = { ...d, assignee_id: d.assignee_id || null, sprint_id: d.sprint_id || null, parent_id: d.parent_id || null };
+        const res = task ? await patch(`/tasks/${task.id}`, body) : await post('/tasks', { ...body, status });
         toast(task ? 'Änderungen gespeichert.' : 'Aufgabe angelegt.');
         taskNotice(res);
         route();
@@ -811,6 +922,15 @@ function taskDialog(task, status, sprints, selSprint, tasks) {
         route();
       });
       $('[data-open-parent]', dlg)?.addEventListener('click', () => taskDialog(parentRecord, null, sprints, selSprint, tasks));
+
+      // Beschreibung wächst mit dem Text mit und lässt sich zusätzlich von Hand größer ziehen.
+      const desc = $('#td', dlg);
+      const grow = (limit) => {
+        if (desc.scrollHeight <= desc.clientHeight) return;
+        desc.style.height = Math.min(desc.scrollHeight + 2, limit) + 'px';
+      };
+      grow(window.innerHeight * 0.5);
+      desc.addEventListener('input', () => grow(Infinity));
 
       // Teilaufgaben laufen im Sprint der übergeordneten Aufgabe mit.
       const parentSel = $('#tpa', dlg);
@@ -831,12 +951,11 @@ function taskDialog(task, status, sprints, selSprint, tasks) {
   );
 }
 
-// Checkliste der Teilaufgaben im Aufgaben-Dialog. Änderungen werden sofort gespeichert.
+// Liste der Teilaufgaben im Aufgaben-Dialog. Neue werden sofort gespeichert; ihren Status ändert man auf dem Board.
 function mountSubtasks(dlg, task, getSubs, setSubs, tasks, openSub) {
   const list = $('[data-subs-list]', dlg);
   const input = $('[data-sub-title]', dlg);
   const addBtn = $('[data-sub-add]', dlg);
-  const statusSel = $('#ts', dlg);
 
   const render = () => {
     const subs = getSubs();
@@ -847,19 +966,13 @@ function mountSubtasks(dlg, task, getSubs, setSubs, tasks, openSub) {
       ? subs
           .map(
             (s) => `<li class="${s.status === 'done' ? 'done' : ''}">
-              <input type="checkbox" data-toggle="${s.id}" ${s.status === 'done' ? 'checked' : ''} aria-label="#${s.id} ${esc(s.title)} erledigt">
               <button type="button" class="sub-open" data-open-sub="${s.id}">${esc(s.title)}</button>
-              <span class="chip">${STATUS_NAME[s.status]}</span>
+              <span class="chip${s.status === 'done' ? ' ok' : ''}">${STATUS_NAME[s.status]}</span>
               ${s.assignee_id ? `<span class="avatar sm" title="${esc(s.assignee_name)}">${esc(initials(s.assignee_name))}</span>` : '<span></span>'}
             </li>`
           )
           .join('')
       : `<li class="none small muted">Noch keine. Zerlege die Aufgabe in Schritte, die man an einem Tag schafft.</li>`;
-    // „Erledigt“ erst, wenn alle Teilaufgaben erledigt sind
-    const doneOpt = $('option[value="done"]', statusSel);
-    const blocked = done < subs.length && statusSel.value !== 'done';
-    doneOpt.disabled = blocked;
-    doneOpt.textContent = blocked ? `Erledigt (erst alle Teilaufgaben, ${done}/${subs.length})` : 'Erledigt';
   };
 
   const refresh = async () => {
@@ -872,25 +985,10 @@ function mountSubtasks(dlg, task, getSubs, setSubs, tasks, openSub) {
   const afterChange = async (res) => {
     state.dirty = true;
     taskNotice(res);
-    if (res?.reopened === task.id) {
-      task.status = 'doing';
-      statusSel.value = 'doing';
-    }
+    if (res?.reopened === task.id) task.status = 'doing';
     await refresh();
   };
 
-  list.addEventListener('change', async (e) => {
-    const id = Number(e.target.dataset.toggle);
-    if (!id) return;
-    e.target.disabled = true;
-    try {
-      await afterChange(await patch(`/tasks/${id}`, { status: e.target.checked ? 'done' : 'todo' }));
-    } catch (ex) {
-      e.target.checked = !e.target.checked;
-      e.target.disabled = false;
-      toast(ex.message, true);
-    }
-  });
   list.addEventListener('click', (e) => {
     const b = e.target.closest('[data-open-sub]');
     if (b) openSub(getSubs().find((s) => s.id === Number(b.dataset.openSub)));
