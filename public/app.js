@@ -1371,11 +1371,13 @@ async function viewProfile(main) {
           <details>
             <summary>ChatGPT</summary>
             <ol>
-              <li>In den Einstellungen unter <b>Apps</b> den <b>Developer Mode</b> einschalten.</li>
-              <li>Eine eigene App anlegen: Adresse oben einfügen, Anmeldung <b>OAuth</b>.</li>
+              <li><b>Plugins</b> öffnen, <b>+</b> und <b>Benutzerdefinierten MCP-Server hinzufügen</b>.</li>
+              <li>Name, z. B. „Bruno-Board“, und unter <b>Verbindung</b> die Adresse oben einfügen.</li>
+              <li>Als Authentifizierung <b>OAuth</b> wählen.</li>
+              <li>Risikowarnung lesen, <b>Ich verstehe und möchte fortfahren</b> ankreuzen, <b>Als Plugin erstellen</b>.</li>
               <li>Hier anmelden und <b>Erlauben</b>.</li>
             </ol>
-            <p>Developer Mode gibt es nicht in jedem ChatGPT-Tarif, und die Menünamen ändern sich öfter.</p>
+            <p>Die Menünamen ändern sich bei ChatGPT öfter.</p>
           </details>
           <details>
             <summary>Claude Code</summary>
