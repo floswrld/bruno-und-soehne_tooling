@@ -9,7 +9,7 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 - **Keine Selbstregistrierung.** Nur die Geschäftsführung (Admins) legt Zugänge an. Jeder neue Zugang bekommt ein Einmal-Passwort wie `Pumpe-8723-Kupfer-Basalt`, das bei der ersten Anmeldung ersetzt werden muss.
 - **Rollen:** Geschäftsführung (Admin) und Belegschaft. Admins können Titel vergeben, Rechte ändern, Zugänge deaktivieren und Passwörter zurücksetzen. Die letzte aktive Geschäftsführung kann sich nicht selbst entmachten.
 - **Zeiterfassung:** Ein- und Ausstempeln, Zeit nachtragen und korrigieren, Wochenansicht. Admins sehen die Zeiten aller Mitarbeiter. Die Fleißrangliste auf der Übersicht sehen alle.
-- **Scrum-Board:** Sprints mit Ziel und Zeitraum, fünf Spalten, Story Points, Zuständige, Drag & Drop (auf dem Handy über den Bearbeiten-Dialog).
+- **Scrum-Board:** Sprints mit Ziel und Zeitraum, fünf Spalten, Zuständige, Filter nach Mitarbeiter. Die Spalte einer Karte ändert sich nur per Drag & Drop, nicht im Bearbeiten-Dialog. Auf dem Handy: Karte lange drücken, dann ziehen.
 - **Teilaufgaben:** Aufgaben lassen sich in Teilaufgaben zerlegen (eine Ebene). Sie stehen als eigene Karten auf dem Board, laufen im Sprint der übergeordneten Aufgabe mit, und deren Karte zeigt den Fortschritt. Nach „Erledigt“ darf eine Aufgabe erst, wenn alle Teilaufgaben erledigt sind. Wird danach eine Teilaufgabe wieder geöffnet oder neu angelegt, geht die Aufgabe zurück in Arbeit.
 - **Bauplan:** Platzhalter, wird als Nächstes ausgebaut.
 
