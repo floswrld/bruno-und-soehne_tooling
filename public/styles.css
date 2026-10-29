@@ -452,3 +452,22 @@ dialog[open] { animation: rise .22s var(--ease); }
 .loading .mark { width: 56px; height: 56px; color: var(--bordeaux); animation: breathe 1.4s ease-in-out infinite; }
 @keyframes breathe { 50% { opacity: .35; } }
 .main:focus{outline:none}
+
+/* ---------- KI-Apps: Zustimmungsseite (OAuth) und Adresse zum Kopieren ---------- */
+
+.consent-body { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
+.consent { width: 100%; max-width: 460px; display: grid; gap: 14px; }
+.consent-mark { width: 52px; height: 52px; }
+.consent h1 { font-family: var(--serif); font-weight: 500; font-size: 34px; line-height: 1.05; margin: 0; }
+.consent p { margin: 0; }
+.consent .lead { font-size: 16px; }
+.consent .warn { color: var(--bordeaux); font-weight: 600; }
+.consent-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.consent-list li { position: relative; padding-left: 24px; }
+.consent-list li::before { position: absolute; left: 0; font-weight: 700; }
+.consent-list .yes::before { content: '✓'; color: var(--moss); }
+.consent-list .no::before { content: '✕'; color: var(--bordeaux); }
+.consent-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+
+.copy-row { display: flex; align-items: center; gap: 8px; }
+.copy-row .code { flex: 1; min-width: 0; padding: 8px 12px; white-space: nowrap; overflow-x: auto; }

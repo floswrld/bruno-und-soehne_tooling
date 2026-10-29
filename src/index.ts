@@ -3,24 +3,9 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { hashPassword, verifyPassword, DUMMY_HASH, newToken, sha256Hex, tempPassword } from './crypto';
 import { HttpError, fail, str, int } from './util';
 import { listTasks, createTask, updateTask } from './tasks';
-import { mcpUser, handleMcp, MCP_KEY_PREFIX } from './mcp';
-
-type Env = {
-  DB: D1Database;
-  ASSETS: Fetcher;
-  SETUP_TOKEN?: string;
-};
-
-type User = {
-  id: number;
-  username: string;
-  display_name: string;
-  title: string;
-  role: 'admin' | 'user';
-  must_change_password: number;
-  active: number;
-  created_at: string;
-};
+import { MCP_KEY_PREFIX } from './mcp';
+import { oauthFor, authorizePage, authorizeDecision, listConnections, revokeConnection } from './oauth';
+import type { Env, User } from './types';
 
 type Vars = { user: User };
 type C = Context<{ Bindings: Env; Variables: Vars }>;
@@ -154,17 +139,22 @@ app.post('/api/auth/logout', async (c) => {
 
 // ---------- Ab hier nur angemeldet ----------
 
-async function auth(c: C, next: Next) {
+// Angemeldeter Mitarbeiter aus dem Sitzungs-Cookie, sonst null
+async function sessionUser(c: C): Promise<User | null> {
   const token = getCookie(c, COOKIE);
-  if (!token) fail(401, 'Bitte anmelden.');
-  const id = await sha256Hex(token!);
-  const u = await c.env.DB.prepare(
+  if (!token) return null;
+  return c.env.DB.prepare(
     `SELECT ${USER_COLS.split(', ').map((col) => 'u.' + col).join(', ')}
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.id = ? AND s.expires_at > ? AND u.active = 1`
   )
-    .bind(id, new Date().toISOString())
+    .bind(await sha256Hex(token), new Date().toISOString())
     .first<User>();
+}
+
+async function auth(c: C, next: Next) {
+  if (!getCookie(c, COOKIE)) fail(401, 'Bitte anmelden.');
+  const u = await sessionUser(c);
   if (!u) fail(401, 'Sitzung abgelaufen. Bitte neu anmelden.');
   c.set('user', u!);
   // Wer ein Einmal-Passwort hat, darf nur das Passwort ändern.
@@ -300,6 +290,26 @@ app.post('/api/users/:id/mcp-keys', async (c) => {
     .bind(id, await sha256Hex(key), key.slice(-4), label, c.get('user').id)
     .run();
   return c.json({ key }, 201); // wird nur jetzt einmal angezeigt
+});
+
+// Per OAuth verbundene KI-Apps: jeder sieht und trennt seine eigenen, die Geschäftsführung die aller.
+
+app.get('/api/me/connections', async (c) => c.json(await listConnections(c.env, c.req.url, c.get('user').id)));
+
+app.delete('/api/me/connections/:grantId', async (c) => {
+  await revokeConnection(c.env, c.req.url, c.get('user').id, c.req.param('grantId'));
+  return c.json({ ok: true });
+});
+
+app.get('/api/users/:id/connections', async (c) => {
+  adminOnly(c);
+  return c.json(await listConnections(c.env, c.req.url, Number(c.req.param('id'))));
+});
+
+app.delete('/api/users/:id/connections/:grantId', async (c) => {
+  adminOnly(c);
+  await revokeConnection(c.env, c.req.url, Number(c.req.param('id')), c.req.param('grantId'));
+  return c.json({ ok: true });
 });
 
 app.delete('/api/users/:id/mcp-keys/:keyId', async (c) => {
@@ -515,21 +525,27 @@ app.delete('/api/tasks/:id', async (c) => {
 app.all('/api/*', (c) => c.json({ error: 'Unbekannter Endpunkt.' }, 404));
 
 // ---------- MCP für KI-Agenten (nur Scrum-Board) ----------
-// Eigener Zugang per Bearer-Schlüssel. Sitzungs-Cookies gelten hier nicht, MCP-Schlüssel nicht unter /api.
+// Hono beschreibt den Ausführungskontext schmaler als Workers; zur Laufzeit ist es derselbe.
+const run = (c: C) => c.executionCtx as ExecutionContext;
+
+// Zugang per OAuth (jeder Mitarbeiter verbindet selbst, z. B. ChatGPT oder die Claude-App)
+// oder per MCP-Schlüssel der Geschäftsführung. Sitzungs-Cookies gelten hier nicht.
 
 app.all('/mcp', async (c) => {
   // Browser dürfen den Endpunkt nicht von fremden Seiten aus ansprechen (DNS-Rebinding).
   const origin = c.req.header('origin');
   if (origin && new URL(origin).host !== new URL(c.req.url).host) return c.json({ error: 'Fremde Herkunft abgelehnt.' }, 403);
-  const user = await mcpUser(c.env.DB, c.req.header('authorization'));
-  if (!user) {
-    return c.json({ error: 'Gültiger MCP-Schlüssel fehlt.' }, 401, { 'WWW-Authenticate': 'Bearer realm="Bruno & Söhne Scrum-Board"' });
-  }
-  c.executionCtx.waitUntil(
-    c.env.DB.prepare(`UPDATE mcp_keys SET last_used_at = datetime('now') WHERE id = ?`).bind(user.key_id).run()
-  );
-  return handleMcp(c.req.raw, c.env.DB, user);
+  return oauthFor(c.req.url).resource.fetch(c.req.raw, c.env, run(c));
 });
+
+// Zustimmungsseite: Mitarbeiter erlaubt einer KI-App den Zugriff aufs Board.
+app.get('/authorize', async (c) => authorizePage(c.req.raw, c.env, await sessionUser(c)));
+app.post('/authorize', async (c) => authorizeDecision(c.req.raw, c.env, await sessionUser(c)));
+
+// Protokollteil (Metadaten, Token, Registrierung) übernimmt die OAuth-Bibliothek.
+app.all('/.well-known/oauth-protected-resource/*', (c) => oauthFor(c.req.url).resource.fetch(c.req.raw, c.env, run(c)));
+app.all('/.well-known/*', (c) => oauthFor(c.req.url).server.fetch(c.req.raw, c.env, run(c)));
+app.all('/oauth/*', (c) => oauthFor(c.req.url).server.fetch(c.req.raw, c.env, run(c)));
 
 // Alles andere: die Single-Page-App
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));

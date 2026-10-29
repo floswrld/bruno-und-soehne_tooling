@@ -48,6 +48,12 @@ function toast(msg, isErr = false) {
 
 const state = { me: null, users: [], timers: [], dirty: false };
 
+// Rücksprung nach der Anmeldung, nur zur eigenen Zustimmungsseite
+const oauthNext = (() => {
+  const n = new URLSearchParams(location.search).get('next');
+  return n && /^\/authorize\?/.test(n) ? n : null;
+})();
+
 function clearTimers() {
   state.timers.forEach(clearInterval);
   state.timers = [];
@@ -195,6 +201,8 @@ async function route() {
     }
   }
   if (state.me.must_change_password) return viewForcePassword();
+  // Kam die Anmeldung von einer KI-App (OAuth), geht es zurück zur Zustimmungsseite.
+  if (oauthNext) return location.replace(oauthNext);
 
   let key = location.hash.replace(/^#\/?/, '').split('?')[0];
   if (!ROUTES[key] || (ROUTES[key].admin && state.me.role !== 'admin')) key = '';
@@ -268,7 +276,9 @@ function authLayout(inner) {
 function viewLogin() {
   document.title = 'Anmelden – Bruno & Söhne';
   authLayout(`
-    <div><h1>Willkommen zurück.</h1><p class="lead">Zugänge vergibt ausschließlich die Geschäftsführung.</p></div>
+    <div><h1>Willkommen zurück.</h1><p class="lead">${
+      oauthNext ? 'Melde dich an, um deine KI-App mit dem Scrum-Board zu verbinden.' : 'Zugänge vergibt ausschließlich die Geschäftsführung.'
+    }</p></div>
     <form class="form" novalidate>
       <div class="field"><label for="u">Benutzername</label><input class="input" id="u" name="username" autocomplete="username" required autocapitalize="none" spellcheck="false"></div>
       <div class="field"><label for="p">Passwort</label><input class="input" id="p" name="password" type="password" autocomplete="current-password" required></div>
@@ -1158,6 +1168,48 @@ const sqlDate = (s) => new Date(s.replace(' ', 'T') + 'Z');
 const fmtWhen = (s) => (s ? `${fmtShort.format(sqlDate(s))}, ${fmtTime.format(sqlDate(s))}` : 'nie');
 
 // MCP-Schlüssel eines Mitarbeiters im Bearbeiten-Dialog (nur Geschäftsführung sieht den Dialog)
+// Per OAuth verbundene KI-Apps (eigene im Profil, die eines Mitarbeiters im Personal-Dialog)
+async function mountConnections(list, base) {
+  const render = async () => {
+    const conns = await api('GET', `${base}/connections`);
+    list.innerHTML = conns.length
+      ? conns
+          .map(
+            (g) => `<li>
+              <span class="key-name">${esc(g.client)}</span>
+              <span class="small muted">seit ${fmtShort.format(new Date(g.created_at))}</span>
+              <button type="button" class="btn btn-danger btn-sm" data-disconnect="${esc(g.id)}">Trennen</button>
+            </li>`
+          )
+          .join('')
+      : `<li class="none small muted">Keine KI-App verbunden.</li>`;
+  };
+  list.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-disconnect]');
+    if (!b) return;
+    // erster Klick fragt, zweiter trennt
+    if (!b.dataset.armed) {
+      b.dataset.armed = '1';
+      b.textContent = 'Wirklich?';
+      return;
+    }
+    b.disabled = true;
+    try {
+      await del(`${base}/connections/${encodeURIComponent(b.dataset.disconnect)}`);
+      toast('Getrennt. Die App hat ab sofort keinen Zugang mehr.');
+      await render();
+    } catch (ex) {
+      toast(ex.message, true);
+      b.disabled = false;
+    }
+  });
+  try {
+    await render();
+  } catch (ex) {
+    list.innerHTML = `<li class="none small muted">${esc(ex.message)}</li>`;
+  }
+}
+
 async function mountMcpKeys(dlg, u) {
   const list = $('[data-key-list]', dlg);
   const label = $('[data-key-label]', dlg);
@@ -1248,6 +1300,8 @@ function userDialog(u) {
                   <input class="input" data-key-label maxlength="60" placeholder="Bezeichnung, z. B. Claude Code Laptop" aria-label="Bezeichnung des neuen Schlüssels">
                   <button type="button" class="btn btn-ghost btn-sm" data-key-add>${I.plus}Schlüssel</button>
                 </div>
+                <div class="subs-head"><h3>Selbst verbundene KI-Apps</h3><span class="small muted">per Anmeldung</span></div>
+                <ul class="sub-list keys" data-conn-list><li class="none small muted">Lädt …</li></ul>
               </section>`
             : ''
         }
@@ -1281,7 +1335,10 @@ function userDialog(u) {
           $('.error', dlg).textContent = ex.message;
         }
       });
-      if (u?.active) mountMcpKeys(dlg, u);
+      if (u?.active) {
+        mountMcpKeys(dlg, u);
+        mountConnections($('[data-conn-list]', dlg), `/users/${u.id}`);
+      }
     }
   );
 }
@@ -1292,15 +1349,28 @@ async function viewProfile(main) {
   const me = state.me;
   main.innerHTML = `
     <header class="page-head"><div><h1>${esc(me.display_name)}</h1><p>${esc(me.title)}. ${me.role === 'admin' ? 'Geschäftsführung.' : 'Belegschaft.'} Den Titel vergibt die Geschäftsführung.</p></div></header>
-    <section class="panel" style="max-width:520px">
-      <div class="panel-head"><h2>Passwort ändern</h2></div>
-      ${passwordForm(false)}
-    </section>`;
+    <div class="grid" style="max-width:520px">
+      <section class="panel">
+        <div class="panel-head"><h2>Passwort ändern</h2></div>
+        ${passwordForm(false)}
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>KI-Apps</h2><span class="small muted">nur Scrum-Board</span></div>
+        <p class="small muted" style="margin:0 0 12px">ChatGPT, die Claude-App und andere KI-Apps können in deinem Namen das Scrum-Board bearbeiten. Lege in der App einen eigenen Connector (MCP) mit dieser Adresse an und erlaube den Zugriff, wenn du gefragt wirst. Löschen kann die App nichts.</p>
+        <div class="copy-row"><code class="code">${esc(location.origin)}/mcp</code><button type="button" class="btn btn-ghost btn-sm" data-copy-url>Kopieren</button></div>
+        <div class="subs" style="margin-top:16px">
+          <div class="subs-head"><h3>Verbunden</h3></div>
+          <ul class="sub-list keys" data-conn-list><li class="none small muted">Lädt …</li></ul>
+        </div>
+      </section>
+    </div>`;
   bindForm($('form', main), async (d) => {
     await savePassword(d);
     $('form', main).reset();
     toast('Passwort gespeichert. Andere Geräte wurden abgemeldet.');
   });
+  $('[data-copy-url]', main).onclick = () => copy(`${location.origin}/mcp`);
+  mountConnections($('[data-conn-list]', main), '/me');
 }
 
 route();

@@ -11,20 +11,20 @@ const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
 
 const LANE: Record<Status, string> = { backlog: 'Backlog', todo: 'To do', doing: 'In Arbeit', review: 'Review', done: 'Erledigt' };
 
-type McpUser = { id: number; display_name: string; key_id: number };
+// Wer arbeitet hier? Per MCP-Schlüssel (key_id) oder per OAuth-App (client_id).
+export type McpUser = { id: number; display_name: string; key_id: number | null; client_id: string | null };
 type Args = Record<string, unknown>;
 
-// Bearer-Schlüssel prüfen. Deaktivierte Mitarbeiter verlieren den Zugang sofort.
-export async function mcpUser(db: D1Database, header: string | undefined): Promise<McpUser | null> {
-  const m = /^Bearer\s+(\S+)$/i.exec(header ?? '');
-  if (!m || !m[1].startsWith(MCP_KEY_PREFIX)) return null;
+// MCP-Schlüssel prüfen. Deaktivierte Mitarbeiter verlieren den Zugang sofort.
+export async function keyOwner(db: D1Database, key: string): Promise<{ id: number; display_name: string; key_id: number } | null> {
+  if (!key.startsWith(MCP_KEY_PREFIX)) return null;
   return db
     .prepare(
       `SELECT u.id, u.display_name, k.id AS key_id FROM mcp_keys k JOIN users u ON u.id = k.user_id
        WHERE k.key_hash = ? AND u.active = 1`
     )
-    .bind(await sha256Hex(m[1]))
-    .first<McpUser>();
+    .bind(await sha256Hex(key))
+    .first();
 }
 
 const INSTRUCTIONS = `Scrum-Board der Bruno & Söhne GmbH. Du arbeitest im Namen von dem Mitarbeiter, dem der Schlüssel gehört.
@@ -291,7 +291,9 @@ async function handleMessage(m: Rpc, db: D1Database, user: McpUser) {
       try {
         const data = await tool.run(db, user, typeof args === 'object' && args ? args : {});
         // Protokoll in den Workers Logs: wer hat per Agent was am Board gemacht
-        if (!tool.annotations.readOnlyHint) console.log(JSON.stringify({ mcp: tool.name, user: user.id, key: user.key_id, args }));
+        if (!tool.annotations.readOnlyHint) {
+          console.log(JSON.stringify({ mcp: tool.name, user: user.id, key: user.key_id, client: user.client_id, args }));
+        }
         return ok(m.id, { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }], structuredContent: data, isError: false });
       } catch (e) {
         // Regelverstöße und Tippfehler gehen als Werkzeugfehler zurück, damit der Agent sie lesen und korrigieren kann.
