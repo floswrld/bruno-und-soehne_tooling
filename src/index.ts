@@ -477,7 +477,6 @@ type Task = {
   title: string;
   description: string;
   status: (typeof STATUSES)[number];
-  points: number | null;
   assignee_id: number | null;
   sprint_id: number | null;
   position: number;
@@ -535,12 +534,6 @@ function status(v: unknown): string {
   return v as string;
 }
 
-function points(v: unknown): number | null {
-  const n = int(v, 'Story Points');
-  if (n !== null && (n < 0 || n > 100)) fail(400, 'Story Points: 0 bis 100.');
-  return n;
-}
-
 app.post('/api/tasks', async (c) => {
   const me = c.get('user');
   const b = await body(c);
@@ -555,9 +548,9 @@ app.post('/api/tasks', async (c) => {
   const stmts = [
     db
       .prepare(
-        'INSERT INTO tasks (title, description, status, points, assignee_id, sprint_id, position, parent_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO tasks (title, description, status, assignee_id, sprint_id, position, parent_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .bind(title, desc, st, points(b.points), int(b.assignee_id, 'Zuständig'), sprint, (max?.p ?? 0) + 1, parent?.id ?? null, me.id),
+      .bind(title, desc, st, int(b.assignee_id, 'Zuständig'), sprint, (max?.p ?? 0) + 1, parent?.id ?? null, me.id),
   ];
   const reopen = parent?.status === 'done' && st !== 'done';
   if (reopen) stmts.push(reopenTask(db, parent!.id));
@@ -575,7 +568,6 @@ app.patch('/api/tasks/:id', async (c) => {
     title: b.title !== undefined ? str(b.title, 'Titel', { max: 140 }) : t!.title,
     description: b.description !== undefined ? str(b.description, 'Beschreibung', { min: 0, max: 4000, optional: true }) : t!.description,
     status: b.status !== undefined ? status(b.status) : t!.status,
-    points: b.points !== undefined ? points(b.points) : t!.points,
     assignee_id: b.assignee_id !== undefined ? int(b.assignee_id, 'Zuständig') : t!.assignee_id,
     sprint_id: b.sprint_id !== undefined ? int(b.sprint_id, 'Sprint') : t!.sprint_id,
     position: b.position !== undefined ? Number(b.position) : t!.position,
@@ -596,10 +588,10 @@ app.patch('/api/tasks/:id', async (c) => {
   const stmts = [
     db
       .prepare(
-        `UPDATE tasks SET title = ?, description = ?, status = ?, points = ?, assignee_id = ?, sprint_id = ?, position = ?, parent_id = ?,
+        `UPDATE tasks SET title = ?, description = ?, status = ?, assignee_id = ?, sprint_id = ?, position = ?, parent_id = ?,
          updated_at = datetime('now') WHERE id = ?`
       )
-      .bind(next.title, next.description, next.status, next.points, next.assignee_id, next.sprint_id, next.position, next.parent_id, id),
+      .bind(next.title, next.description, next.status, next.assignee_id, next.sprint_id, next.position, next.parent_id, id),
   ];
   // Teilaufgaben ziehen mit, wenn die Aufgabe den Sprint wechselt.
   if (next.sprint_id !== t!.sprint_id) stmts.push(db.prepare('UPDATE tasks SET sprint_id = ? WHERE parent_id = ?').bind(next.sprint_id, id));
