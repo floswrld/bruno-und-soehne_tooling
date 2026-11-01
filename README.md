@@ -12,6 +12,7 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 - **Scrum-Board:** Sprints mit Ziel und Zeitraum, fünf Spalten, Zuständige, Filter nach Mitarbeiter. Die Spalte einer Karte ändert sich nur per Drag & Drop, nicht im Bearbeiten-Dialog. Auf dem Handy: Karte lange drücken, dann ziehen.
 - **Teilaufgaben:** Aufgaben lassen sich in Teilaufgaben zerlegen (eine Ebene). Sie stehen als eigene Karten auf dem Board, laufen im Sprint der übergeordneten Aufgabe mit, und deren Karte zeigt den Fortschritt. Nach „Erledigt“ darf eine Aufgabe erst, wenn alle Teilaufgaben erledigt sind. Wird danach eine Teilaufgabe wieder geöffnet oder neu angelegt, geht die Aufgabe zurück in Arbeit.
 - **Bauplan:** Das Rechenzentrum in 3D (120 × 200 × 40, Dachtechnik ragt darüber hinaus, innen hohl) mit Gelände. Den Innenausbau macht das Team selbst, er steht nicht im Plan. Ebene für Ebene ansehen, Block anklicken für Baustoff und Koordinate, Materialliste mit Stacks und Shulkern. Umschalten zwischen Gesamtbau, schon gebaut und noch offen. Der Plan steht im Code, hochladen kann niemand etwas.
+- **Live vom Minecraft-Server:** Mit der Mod „Bruno Live“ zeigt das Intranet, wer online ist, und baut der Bauplan sich beim Bauen live mit: frische Blöcke leuchten auf, der Fortschritt zählt mit. Siehe unten.
 - **Hell und Dunkel:** Standard ist die Einstellung des Geräts, umschalten per Sonne/Mond-Knopf oder im Profil. Die Wahl liegt nur im Browser. Im Dunkeln ist im Bauplan Nacht, und die Lampen leuchten.
 
 **Sicherheit:** Passwörter als PBKDF2-SHA256 (100.000 Runden, Salt). Sitzungen als HttpOnly-Cookie, in der Datenbank nur als SHA-256-Hash gespeichert. Login-Sperre nach 8 Fehlversuchen in 15 Minuten. Schreibende Anfragen müssen JSON vom eigenen Origin sein (Schutz gegen CSRF). Schriften liegen lokal, es gehen keine Anfragen an Google.
@@ -114,8 +115,26 @@ public/vendor/three/  three.js (MIT), liegt lokal und wird nur auf der Bauplan-S
 public/rechenzentrum.plan.json   Der Bauplan, nur angemeldet abrufbar (eigene Route in src/index.ts)
 src/rechenzentrum.meta.json      Prüfsumme und Blockzahl des Plans für den Worker
 scripts/rechenzentrum/   Der Plan im Code: Raster, Logo, Fassade, Dach, Gelände
-scripts/              Plan erzeugen (npm run bauplan:plan), mit der Welt abgleichen (npm run bauplan:sync)
+scripts/              Plan erzeugen (npm run bauplan:plan), mit der Welt abgleichen (npm run bauplan:sync), Mod bauen und testen
+mod/                  Die Fabric-Mod „Bruno Live“ (Java, Gradle). Fertig gebaut in public/downloads/
+src/live.ts           Schnittstellen für Mod und Live-Anzeige
 ```
+
+### Live-Abgleich mit der Mod „Bruno Live“
+
+Aternos erlaubt keine eigenen Server-Mods, darum läuft der Abgleich im Client: eine kleine Fabric-Mod im CurseForge-Profil (Ordner `mod/`, Minecraft 26.3). Sie vergleicht die geladenen Chunks mit dem Plan und meldet alle 10 Sekunden, was sich geändert hat, dazu die Spielerliste und die eigene Position. Die Website fragt auf der Bauplan-Seite alle 5 Sekunden nach, sonst alle 20.
+
+Einmalig einrichten:
+
+1. `npm run db:remote` und deployen.
+2. Als Geschäftsführung im Bauplan unter **Live → Standort und Server** die Server-Adresse und die Nordwest-Ecke des Gebäudes eintragen. Ohne Adresse meldet die Mod gar nichts, ohne Standort nur, wer online ist.
+3. Jeder Mitspieler folgt der Anleitung im Profil: Mod herunterladen, Zugangsdatei erzeugen, beides in den Profilordner legen.
+
+So bleibt es harmlos: Die Mod meldet nur auf dem eingestellten Server und nur in der Oberwelt Blöcke. Jeder hat einen eigenen Schlüssel, der nur `/api/mc/*` darf und sich im Profil widerrufen lässt. Sie sieht nur, was der Client ohnehin kennt: Was gerade niemand mit Mod in Sichtweite hat, bleibt auf dem letzten Stand. Ohne Spieler mit Mod gibt es keine Daten, der Datei-Abgleich (`npm run bauplan:sync`) ergänzt das und lässt sich weiter nutzen.
+
+Gespeichert wird je Chunk, nicht je Block, und unveränderte Chunks schreiben nichts. So bleibt es selbst bei fünf gleichzeitig bauenden Spielern unter dem Gratis-Limit von D1 (100.000 geschriebene Zeilen am Tag).
+
+Die Mod bauen (JDK 25 in `JAVA_HOME`): `npm run mod:bauen` legt sie nach `public/downloads/bruno-live.jar`. Echter Test mit dem Spiel gegen das lokale Intranet: `npm run lokal`, dann in einem zweiten Terminal `npm run mod:test`. Dabei öffnet sich kurz ein Spielfenster, in dem ein Testserver läuft. Fenster offen lassen, es schließt sich selbst. Zum Ausprobieren im Einzelspieler `"einzelspieler": true` in `config/bruno-live.json` ergänzen.
 
 ### Den Bauplan ändern
 

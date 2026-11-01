@@ -5,6 +5,7 @@ import { HttpError, fail, str, int } from './util';
 import { listTasks, createTask, updateTask } from './tasks';
 import { MCP_KEY_PREFIX } from './mcp';
 import { oauthFor, authorizePage, authorizeDecision, listConnections, revokeConnection } from './oauth';
+import { liveChunks, liveEinstellung, liveRoutes } from './live';
 import plan from './rechenzentrum.meta.json';
 import type { Env, User } from './types';
 
@@ -535,7 +536,9 @@ app.get('/api/bauplan', auth, async (c) => {
   }>();
   // Ein Abgleich gegen einen älteren Plan passt nicht mehr zu den Blocknummern.
   const fortschritt = row?.plan_hash === plan.hash ? { ...row, falsch: JSON.parse(row.falsch) } : null;
-  return c.json({ plan_hash: plan.hash, fortschritt });
+  const jetzt = Date.now();
+  const [einstellung, chunks] = await Promise.all([liveEinstellung(c.env.DB), liveChunks(c.env.DB, 0)]);
+  return c.json({ plan_hash: plan.hash, fortschritt, anker: einstellung.anker, server: einstellung.server, live: { jetzt, chunks } });
 });
 
 // Meldung des Abgleichs (scripts/bauplan-sync.mjs). Kein Cookie, sondern ein eigener Schlüssel.
@@ -564,6 +567,8 @@ app.post('/api/bauplan/fortschritt', async (c) => {
     .run();
   return c.json({ ok: true });
 });
+
+liveRoutes(app, auth, adminOnly);
 
 app.all('/api/*', (c) => c.json({ error: 'Unbekannter Endpunkt.' }, 404));
 

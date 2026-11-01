@@ -7,7 +7,7 @@
 //
 // Schreibt zwei Dateien:
 //   public/rechenzentrum.plan.json   der ganze Plan, wird angemeldet ausgeliefert (siehe src/index.ts)
-//   src/rechenzentrum.meta.json      nur Prüfsumme und Blockzahl, das genügt dem Worker
+//   src/rechenzentrum.meta.json      nur Prüfsumme, Blockzahl und Maße, das genügt dem Worker
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { BLOECKE } from '../public/bloecke.js';
@@ -126,7 +126,7 @@ const inhalt = {
 const hash = createHash('sha256').update(JSON.stringify(inhalt)).digest('hex').slice(0, 16);
 const text = JSON.stringify({ hash, ...inhalt });
 writeFileSync(new URL('../public/rechenzentrum.plan.json', import.meta.url), `${text}\n`);
-writeFileSync(new URL('../src/rechenzentrum.meta.json', import.meta.url), `${JSON.stringify({ hash, gesamt })}\n`);
+writeFileSync(new URL('../src/rechenzentrum.meta.json', import.meta.url), `${JSON.stringify({ hash, gesamt, groesse, gebaeude: inhalt.gebaeude })}\n`);
 
 // ---------- Bericht ----------
 

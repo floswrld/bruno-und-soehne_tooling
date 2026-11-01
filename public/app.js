@@ -248,6 +248,55 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
+// ---------- Live vom Minecraft-Server ----------
+// Eine einzige Abfrageschleife für die ganze App: alle 20 Sekunden, auf der Bauplan-Seite alle 5.
+// In einem versteckten Tab wird nicht abgefragt, das schont das Gratis-Kontingent.
+
+function liveListeFuellen(el, d) {
+  const zahl = d?.spieler.length ?? 0;
+  el.innerHTML = zahl
+    ? `<ul class="live-liste">${d.spieler.map((s) => `<li><span class="pulse-punkt"></span><b>${esc(s.name)}</b>${s.mitarbeiter ? `<span class="muted small">${esc(s.mitarbeiter)}</span>` : ''}</li>`).join('')}</ul>`
+    : `<p class="small muted" style="margin:0">${d?.beobachtet ? 'Niemand online.' : 'Gerade meldet niemand etwas. Sichtbar wird es, sobald jemand mit der Mod Bruno Live auf dem Server ist.'}</p>`;
+}
+
+function liveZeigen(d) {
+  const zahl = d?.spieler.length ?? 0;
+  $$('[data-live-zahl]').forEach((el) => {
+    el.hidden = !zahl;
+    el.textContent = `${zahl} auf dem Server`;
+  });
+  if (d) $$('[data-live-liste]').forEach((el) => liveListeFuellen(el, d));
+}
+
+async function liveAbrufen() {
+  if (document.hidden || !state.me) return;
+  const ansicht = state.liveAnsicht;
+  try {
+    const d = await api('GET', ansicht ? `/live?seit=${ansicht.seit}` : '/live?nur=spieler');
+    state.live = d;
+    liveZeigen(d);
+    if (ansicht && state.liveAnsicht === ansicht) {
+      ansicht.seit = d.jetzt - 15000;
+      ansicht.empfangen(d);
+    }
+  } catch {
+    // Beim nächsten Mal wieder. Live-Daten sind es nicht wert, jemanden zu stören.
+  }
+}
+
+function liveSchleife() {
+  if (state.liveLaeuft) return;
+  state.liveLaeuft = true;
+  const takt = async () => {
+    await liveAbrufen();
+    setTimeout(takt, state.liveAnsicht ? 5000 : 20000);
+  };
+  takt();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) liveAbrufen();
+  });
+}
+
 const themaIcon = () => (window.brunoThema.aktiv() === 'dunkel' ? I.sonne : I.mond);
 document.addEventListener('thema', () => {
   $$('[data-thema-knopf]').forEach((b) => (b.innerHTML = themaIcon()));
@@ -266,6 +315,7 @@ function renderShell(active) {
       <aside class="side"><div class="side-in">
         ${brand}
         <nav class="nav" aria-label="Hauptmenü">${items.map(link).join('')}</nav>
+        <a class="side-live" href="#/bauplan" data-live-zahl hidden></a>
         <div class="side-foot">
           <a href="#/profil" class="avatar" title="Profil" aria-label="Profil">${esc(initials(me.display_name))}</a>
           <div class="who"><b>${esc(me.display_name)}</b><span>${esc(me.title)}</span></div>
@@ -284,6 +334,8 @@ function renderShell(active) {
       <main class="main" tabindex="-1"><div class="main-inner"></div></main>
       <nav class="tabbar" style="--tabs:${items.length}" aria-label="Hauptmenü">${items.map(tab).join('')}</nav>
     </div>`;
+  liveZeigen(state.live);
+  liveSchleife();
   $$('[data-thema-knopf]').forEach((b) =>
     b.addEventListener('click', () => window.brunoThema.setzen(window.brunoThema.aktiv() === 'dunkel' ? 'hell' : 'dunkel'))
   );
@@ -456,7 +508,12 @@ async function viewDashboard(main) {
           }
         </section>
       </div>
-      <section class="panel" style="align-self:start">
+      <div class="grid" style="align-content:start">
+      <section class="panel">
+        <div class="panel-head"><h2>Auf dem Server</h2><a href="#/bauplan" class="small">Zum Bauplan</a></div>
+        <div data-live-liste></div>
+      </section>
+      <section class="panel">
         <div class="panel-head"><h2>Fleißrangliste</h2><span class="muted small">KW ${isoWeek(new Date())}</span></div>
         ${
           team.length
@@ -471,7 +528,12 @@ async function viewDashboard(main) {
         }
         ${sprint ? `<p class="small muted" style="margin:18px 0 0">Aktueller Sprint: <b style="color:var(--ink)">${esc(sprint.name)}</b>${sprint.goal ? `. ${esc(sprint.goal)}` : ''}</p>` : ''}
       </section>
+      </div>
     </div>`;
+  $$('[data-live-liste]', main).forEach((el) => {
+    if (state.live) liveListeFuellen(el, state.live);
+    else el.innerHTML = '<p class="small muted" style="margin:0">Wird geladen …</p>';
+  });
   bindClock(main, current, route);
 }
 
@@ -1116,10 +1178,35 @@ async function viewPlan(main) {
     import('/bauplan.js'),
   ]);
   main.classList.add('breit');
+  const istAdmin = state.me.role === 'admin';
   main.innerHTML = `
     <header class="page-head"><div><h1>Bauplan</h1><p>Das Rechenzentrum, Block für Block: 120 × 200 × 40, mit Kühlung auf dem Dach. Innen ist frei, den Ausbau machen wir selbst.</p></div></header>
     <div data-bauplan></div>`;
-  state.cleanup = modul.zeigeBauplan($('[data-bauplan]', main), { plan, fortschritt: daten.fortschritt }, esc);
+  const ansicht = modul.zeigeBauplan(
+    $('[data-bauplan]', main),
+    {
+      plan,
+      fortschritt: daten.fortschritt,
+      anker: daten.anker,
+      server: daten.server,
+      live: daten.live,
+      istAdmin,
+      toast,
+      speichern: async (werte) => {
+        await api('PUT', '/bauplan/einstellung', werte);
+        toast('Gespeichert.');
+        route();
+      },
+    },
+    esc
+  );
+  // Zehn Sekunden Überlappung, falls eine Meldung genau zwischen zwei Abrufen landet.
+  state.liveAnsicht = { seit: daten.live.jetzt - 15000, empfangen: ansicht.liveEmpfangen };
+  state.cleanup = () => {
+    state.liveAnsicht = null;
+    ansicht.ende();
+  };
+  liveAbrufen();
 }
 
 // ---------- Personal (Admin) ----------
@@ -1381,11 +1468,48 @@ function userDialog(u) {
 
 // ---------- Profil ----------
 
+// Mod „Bruno Live“: Download, Schlüssel und Anleitung für die CurseForge-App
+async function modPanelZeigen(el) {
+  const { key } = await api('GET', '/me/mc-key');
+  el.innerHTML = `
+    <div class="panel-head"><h2>Minecraft-Mod</h2>${key ? `<span class="chip ok">Schlüssel …${esc(key.hint)}</span>` : '<span class="chip off">noch nicht eingerichtet</span>'}</div>
+    <p class="small muted" style="margin:0 0 12px">Bruno Live zeigt hier im Intranet, wer auf dem Server ist und welche Blöcke des Bauplans stehen. Sie meldet nur auf unserem Server: deinen Namen, deine Position, die Spielerliste und welche Plan-Blöcke in deiner Sichtweite stehen. Sonst nichts.</p>
+    <ol class="mod-schritte">
+      <li>In der CurseForge-App beim Profil (Minecraft 26.3, Fabric) über das <b>⋯</b>-Menü <b>Open Folder</b> wählen.</li>
+      <li><a class="btn btn-ghost btn-sm" href="/downloads/bruno-live.jar" download>Mod herunterladen</a> und nach <code>mods</code> legen. Fabric API muss im Profil sein.</li>
+      <li><button type="button" class="btn btn-brass btn-sm" data-mod-key>${key ? 'Neue Datei erzeugen' : 'Zugangsdatei erzeugen'}</button> und nach <code>config</code> legen. ${key ? 'Der alte Schlüssel gilt dann nicht mehr.' : ''}</li>
+      <li>Minecraft starten und auf den Server gehen. Im Chat steht „Bruno Live: verbunden“. <code>/bruno</code> zeigt jederzeit den Stand.</li>
+    </ol>
+    ${key ? `<p class="small muted" style="margin:12px 0 0">Zuletzt benutzt: ${key.last_used_at ? esc(new Date(key.last_used_at + 'Z').toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })) : 'noch nie'}. <button type="button" class="link" data-mod-weg>Schlüssel widerrufen</button></p>` : ''}`;
+  $('[data-mod-key]', el).addEventListener('click', async () => {
+    if (key && !confirm('Neue Datei erzeugen? Der bisherige Schlüssel gilt dann nicht mehr.')) return;
+    try {
+      const { konfig } = await post('/me/mc-key');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(konfig, null, 2)], { type: 'application/json' }));
+      a.download = 'bruno-live.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('bruno-live.json ist da. Ab damit in den config-Ordner.');
+      modPanelZeigen(el);
+    } catch (ex) {
+      toast(ex.message, true);
+    }
+  });
+  $('[data-mod-weg]', el)?.addEventListener('click', async () => {
+    if (!confirm('Schlüssel widerrufen? Die Mod meldet dann nichts mehr.')) return;
+    await del('/me/mc-key');
+    toast('Schlüssel widerrufen.');
+    modPanelZeigen(el);
+  });
+}
+
 async function viewProfile(main) {
   const me = state.me;
   main.innerHTML = `
     <header class="page-head"><div><h1>${esc(me.display_name)}</h1><p>${esc(me.title)}. ${me.role === 'admin' ? 'Geschäftsführung.' : 'Belegschaft.'} Den Titel vergibt die Geschäftsführung.</p></div></header>
     <div class="grid" style="max-width:520px">
+      <section class="panel" data-mod-panel></section>
       <section class="panel">
         <div class="panel-head"><h2>Darstellung</h2></div>
         <div class="seg-wahl" role="group" aria-label="Darstellung">
@@ -1446,6 +1570,7 @@ async function viewProfile(main) {
     toast('Passwort gespeichert. Andere Geräte wurden abgemeldet.');
   });
   $$('[data-thema-wahl]', main).forEach((b) => b.addEventListener('click', () => window.brunoThema.setzen(b.dataset.themaWahl)));
+  modPanelZeigen($('[data-mod-panel]', main));
   $('[data-copy-url]', main).onclick = () => copy(`${location.origin}/mcp`);
   $('[data-copy-cmd]', main).onclick = (e) => copy(e.target.textContent);
   mountConnections($('[data-conn-list]', main), '/me');

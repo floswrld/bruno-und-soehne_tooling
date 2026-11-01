@@ -607,3 +607,38 @@ dialog[open] { animation: rise .22s var(--ease); }
 .howto .code { display: block; margin-top: 4px; padding: 6px 10px; cursor: copy; word-break: normal; overflow-wrap: anywhere; }
 
 .seg-wahl { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ---------- Live vom Minecraft-Server ---------- */
+
+.pulse-punkt { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--moss); box-shadow: 0 0 0 0 rgba(95, 170, 115, .55); animation: live-puls 2s infinite; }
+@keyframes live-puls { 70% { box-shadow: 0 0 0 8px rgba(95, 170, 115, 0); } 100% { box-shadow: 0 0 0 0 rgba(95, 170, 115, 0); } }
+@media (prefers-reduced-motion: reduce) { .pulse-punkt { animation: none; } }
+.side-live { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 8px 12px; border-radius: 10px; color: #CFE3D3; font-size: 13.5px; font-weight: 600; text-decoration: none; }
+.side-live::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: #8FBF9A; }
+.side-live:hover { background: rgba(255, 255, 255, .06); color: #fff; }
+.side-live[hidden] { display: none; }
+.side-live:not([hidden]) + .side-foot { margin-top: 0; }
+.live-liste { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.live-liste li { display: flex; align-items: center; gap: 10px; }
+
+.bp-zwischen { margin: 18px 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.bp-spielerliste { list-style: none; margin: 0; padding: 0; }
+.bp-spielerliste button { width: calc(100% + 16px); margin: 0 -8px; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 14px; font-weight: 500; cursor: pointer; }
+.bp-spielerliste button:hover:not([disabled]) { background: rgba(var(--tint), .06); }
+.bp-spielerliste button[disabled] { cursor: default; }
+.bp-zone-name small { display: block; font-size: 12px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bp-feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; font-size: 13.5px; }
+.bp-feed li { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; }
+.bp-feed small { display: block; font-size: 12px; color: var(--muted); }
+.bp-plus { color: var(--moss); }
+.bp-minus { color: var(--brass); }
+.bp-rot { color: var(--bordeaux); }
+.bp-standort { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.bp-standort summary { cursor: pointer; font-weight: 600; }
+.bp-standort .form { margin-top: 12px; }
+.bp-koordinaten { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.bp-spieler-namen { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.bp-spieler-name { position: absolute; left: 0; top: 0; padding: 2px 7px; border-radius: 5px; background: #F2C14E; color: #1C1416; font-size: 12px; font-weight: 700; white-space: nowrap; }
+
+.mod-schritte { margin: 0; padding-left: 20px; display: grid; gap: 10px; font-size: 14px; }
+.mod-schritte code { padding: 1px 5px; border-radius: 4px; background: var(--steel-wash); font-size: 13px; }
