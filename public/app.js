@@ -120,6 +120,8 @@ const I = {
   people: ico('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18 14.8c1.8.7 3 2.5 3.5 5.2"/>'),
   user: ico('<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4.2-6 8-6s7 2 8 6"/>'),
   logout: ico('<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h10"/>'),
+  sonne: ico('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/>'),
+  mond: ico('<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z"/>'),
   left: ico('<path d="M15 5l-7 7 7 7"/>'),
   right: ico('<path d="M9 5l7 7-7 7"/>'),
   plus: ico('<path d="M12 5v14M5 12h14"/>'),
@@ -192,6 +194,8 @@ async function route() {
   const seq = ++state.seq;
   state.dirty = false;
   clearTimers();
+  state.cleanup?.();
+  state.cleanup = null;
   if (dialog.open) dialog.close();
   let fresh = false;
   if (!state.me) {
@@ -244,11 +248,17 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
+const themaIcon = () => (window.brunoThema.aktiv() === 'dunkel' ? I.sonne : I.mond);
+document.addEventListener('thema', () => {
+  $$('[data-thema-knopf]').forEach((b) => (b.innerHTML = themaIcon()));
+  $$('[data-thema-wahl]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themaWahl === window.brunoThema.wahl())));
+});
+
 function renderShell(active) {
   const me = state.me;
   const items = Object.entries(ROUTES).filter(([, r]) => !r.hidden && (!r.admin || me.role === 'admin'));
   const link = ([k, r]) =>
-    `<a href="#/${k}" ${k === active ? 'aria-current="page"' : ''}>${I[r.icon]}<span>${r.title}</span>${k === 'bauplan' ? '<span class="soon">bald</span>' : ''}</a>`;
+    `<a href="#/${k}" ${k === active ? 'aria-current="page"' : ''}>${I[r.icon]}<span>${r.title}</span></a>`;
   const tab = ([k, r]) => `<a href="#/${k}" ${k === active ? 'aria-current="page"' : ''}>${I[r.icon]}<span>${{ zeit: 'Zeit', board: 'Board' }[k] ?? r.title}</span></a>`;
   const brand = `<a class="brand" href="#/">${mark()}<span class="brand-name">BRUNO<small>&amp; SÖHNE GMBH</small></span></a>`;
   app.innerHTML = `
@@ -259,12 +269,14 @@ function renderShell(active) {
         <div class="side-foot">
           <a href="#/profil" class="avatar" title="Profil" aria-label="Profil">${esc(initials(me.display_name))}</a>
           <div class="who"><b>${esc(me.display_name)}</b><span>${esc(me.title)}</span></div>
+          <button class="icon-btn" data-thema-knopf aria-label="Hell oder dunkel" title="Hell oder dunkel">${themaIcon()}</button>
           <button class="icon-btn" data-logout aria-label="Abmelden" title="Abmelden">${I.logout}</button>
         </div>
       </div></aside>
       <header class="topbar">
         ${brand}
         <div style="display:flex;gap:4px">
+          <button class="icon-btn" data-thema-knopf aria-label="Hell oder dunkel">${themaIcon()}</button>
           <a href="#/profil" class="icon-btn" aria-label="Profil">${I.user}</a>
           <button class="icon-btn" data-logout aria-label="Abmelden">${I.logout}</button>
         </div>
@@ -272,6 +284,9 @@ function renderShell(active) {
       <main class="main" tabindex="-1"><div class="main-inner"></div></main>
       <nav class="tabbar" style="--tabs:${items.length}" aria-label="Hauptmenü">${items.map(tab).join('')}</nav>
     </div>`;
+  $$('[data-thema-knopf]').forEach((b) =>
+    b.addEventListener('click', () => window.brunoThema.setzen(window.brunoThema.aktiv() === 'dunkel' ? 'hell' : 'dunkel'))
+  );
   $$('[data-logout]').forEach((b) =>
     b.addEventListener('click', async () => {
       await post('/auth/logout').catch(() => {});
@@ -1091,22 +1106,20 @@ function sprintDialog(sprint) {
 // ---------- Bauplan ----------
 
 async function viewPlan(main) {
+  // Der Plan ist eine eigene Datei: gezippt vom CDN, das Budget des Workers bleibt unberührt.
+  const [daten, plan, modul] = await Promise.all([
+    api('GET', '/bauplan'),
+    fetch('/rechenzentrum.plan.json').then((r) => {
+      if (!r.ok) throw new Error('Der Bauplan konnte nicht geladen werden.');
+      return r.json();
+    }),
+    import('/bauplan.js'),
+  ]);
+  main.classList.add('breit');
   main.innerHTML = `
-    <header class="page-head"><div><h1>Bauplan</h1><p>Das Rechenzentrum, Block für Block.</p></div></header>
-    <section class="blueprint">
-      <svg class="plan" viewBox="0 0 420 300" fill="none" stroke="#DCE8F4" stroke-width="1.4" aria-hidden="true">
-        <rect x="20" y="40" width="380" height="220"/>
-        <rect x="20" y="40" width="120" height="220" stroke-dasharray="4 4"/>
-        ${Array.from({ length: 6 }, (_, i) => `<rect x="${170 + (i % 3) * 72}" y="${70 + Math.floor(i / 3) * 100}" width="52" height="70"/>${[0, 1, 2, 3].map((j) => `<line x1="${176 + (i % 3) * 72}" y1="${82 + j * 14 + Math.floor(i / 3) * 100}" x2="${216 + (i % 3) * 72}" y2="${82 + j * 14 + Math.floor(i / 3) * 100}"/>`).join('')}`).join('')}
-        <path d="M80 260v26M20 286h380" /><path d="M20 280v12M400 280v12"/>
-        <circle cx="80" cy="150" r="34"/><path d="M80 116v68M46 150h68"/>
-        <text x="210" y="298" fill="#DCE8F4" stroke="none" font-size="11" font-family="Hanken Grotesk, sans-serif" text-anchor="middle">1000 Blöcke</text>
-        <text x="80" y="210" fill="#DCE8F4" stroke="none" font-size="11" font-family="Hanken Grotesk, sans-serif" text-anchor="middle">Kühlung</text>
-      </svg>
-      <h2>Hier entsteht der Bauplan.</h2>
-      <p>Bauabschnitte, Materiallisten und wer welchen Block verantwortet. Bis es so weit ist, planen wir die Arbeit auf dem Scrum-Board.</p>
-      <div><a class="btn btn-brass" href="#/board">Zum Scrum-Board</a></div>
-    </section>`;
+    <header class="page-head"><div><h1>Bauplan</h1><p>Das Rechenzentrum, Block für Block: 120 × 200 × 40, mit Kühlung auf dem Dach. Innen ist frei, den Ausbau machen wir selbst.</p></div></header>
+    <div data-bauplan></div>`;
+  state.cleanup = modul.zeigeBauplan($('[data-bauplan]', main), { plan, fortschritt: daten.fortschritt }, esc);
 }
 
 // ---------- Personal (Admin) ----------
@@ -1374,6 +1387,12 @@ async function viewProfile(main) {
     <header class="page-head"><div><h1>${esc(me.display_name)}</h1><p>${esc(me.title)}. ${me.role === 'admin' ? 'Geschäftsführung.' : 'Belegschaft.'} Den Titel vergibt die Geschäftsführung.</p></div></header>
     <div class="grid" style="max-width:520px">
       <section class="panel">
+        <div class="panel-head"><h2>Darstellung</h2></div>
+        <div class="seg-wahl" role="group" aria-label="Darstellung">
+          ${[['system', 'Wie Gerät'], ['hell', 'Hell'], ['dunkel', 'Dunkel']].map(([k, t]) => `<button type="button" class="btn btn-ghost btn-sm" data-thema-wahl="${k}" aria-pressed="${window.brunoThema.wahl() === k}">${t}</button>`).join('')}
+        </div>
+      </section>
+      <section class="panel">
         <div class="panel-head"><h2>Passwort ändern</h2></div>
         ${passwordForm(false)}
       </section>
@@ -1426,6 +1445,7 @@ async function viewProfile(main) {
     $('form', main).reset();
     toast('Passwort gespeichert. Andere Geräte wurden abgemeldet.');
   });
+  $$('[data-thema-wahl]', main).forEach((b) => b.addEventListener('click', () => window.brunoThema.setzen(b.dataset.themaWahl)));
   $('[data-copy-url]', main).onclick = () => copy(`${location.origin}/mcp`);
   $('[data-copy-cmd]', main).onclick = (e) => copy(e.target.textContent);
   mountConnections($('[data-conn-list]', main), '/me');

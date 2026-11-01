@@ -93,6 +93,7 @@ function page(status: number, title: string, body: string, headers = new Headers
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${esc(title)} – Bruno &amp; Söhne</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/thema.js"></script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="consent-body">
