@@ -5,6 +5,7 @@ import { HttpError, fail, str, int } from './util';
 import { listTasks, createTask, updateTask } from './tasks';
 import { MCP_KEY_PREFIX } from './mcp';
 import { oauthFor, authorizePage, authorizeDecision, listConnections, revokeConnection } from './oauth';
+import plan from './rechenzentrum.meta.json';
 import type { Env, User } from './types';
 
 type Vars = { user: User };
@@ -522,6 +523,48 @@ app.delete('/api/tasks/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+// ---------- Bauplan ----------
+
+app.get('/api/bauplan', auth, async (c) => {
+  const row = await c.env.DB.prepare('SELECT plan_hash, gebaut, gebaut_anzahl, falsch, gescannt_am FROM bauplan_fortschritt WHERE id = 1').first<{
+    plan_hash: string;
+    gebaut: string;
+    gebaut_anzahl: number;
+    falsch: string;
+    gescannt_am: string;
+  }>();
+  // Ein Abgleich gegen einen älteren Plan passt nicht mehr zu den Blocknummern.
+  const fortschritt = row?.plan_hash === plan.hash ? { ...row, falsch: JSON.parse(row.falsch) } : null;
+  return c.json({ plan_hash: plan.hash, fortschritt });
+});
+
+// Meldung des Abgleichs (scripts/bauplan-sync.mjs). Kein Cookie, sondern ein eigener Schlüssel.
+app.post('/api/bauplan/fortschritt', async (c) => {
+  if (!c.env.BAUPLAN_SYNC_KEY) fail(503, 'BAUPLAN_SYNC_KEY ist auf dem Server nicht gesetzt.');
+  const key = (c.req.header('authorization') ?? '').replace(/^Bearer /, '');
+  if ((await sha256Hex(key)) !== (await sha256Hex(c.env.BAUPLAN_SYNC_KEY!))) fail(401, 'Der Schlüssel stimmt nicht.');
+  const b = await body(c);
+  if (b.plan_hash !== plan.hash) fail(409, 'Der Plan wurde geändert. Bitte den aktuellen Stand holen und erneut abgleichen.');
+  const laenge = 4 * Math.ceil(Math.ceil(plan.gesamt / 8) / 3);
+  if (typeof b.gebaut !== 'string' || b.gebaut.length !== laenge || !/^[A-Za-z0-9+/]+={0,2}$/.test(b.gebaut)) fail(400, 'Das Bitfeld passt nicht zum Plan.');
+  const anzahl = b.gebaut_anzahl;
+  if (!Number.isInteger(anzahl) || (anzahl as number) < 0 || (anzahl as number) > plan.gesamt) fail(400, 'Die Anzahl passt nicht zum Plan.');
+  const falsch = b.falsch;
+  const gueltig =
+    typeof falsch === 'object' &&
+    falsch !== null &&
+    Object.values(falsch).every((l) => Array.isArray(l) && l.every((n) => Number.isInteger(n) && n >= 0 && n < plan.gesamt));
+  if (!gueltig) fail(400, 'Die Liste der falschen Blöcke passt nicht zum Plan.');
+  await c.env.DB.prepare(
+    `INSERT INTO bauplan_fortschritt (id, plan_hash, gebaut, gebaut_anzahl, falsch, gescannt_am) VALUES (1, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO UPDATE SET plan_hash = excluded.plan_hash, gebaut = excluded.gebaut, gebaut_anzahl = excluded.gebaut_anzahl,
+       falsch = excluded.falsch, gescannt_am = excluded.gescannt_am`
+  )
+    .bind(plan.hash, b.gebaut, anzahl, JSON.stringify(falsch), new Date().toISOString())
+    .run();
+  return c.json({ ok: true });
+});
+
 app.all('/api/*', (c) => c.json({ error: 'Unbekannter Endpunkt.' }, 404));
 
 // ---------- MCP für KI-Agenten (nur Scrum-Board) ----------
@@ -546,6 +589,9 @@ app.post('/authorize', async (c) => authorizeDecision(c.req.raw, c.env, await se
 app.all('/.well-known/oauth-protected-resource/*', (c) => oauthFor(c.req.url).resource.fetch(c.req.raw, c.env, run(c)));
 app.all('/.well-known/*', (c) => oauthFor(c.req.url).server.fetch(c.req.raw, c.env, run(c)));
 app.all('/oauth/*', (c) => oauthFor(c.req.url).server.fetch(c.req.raw, c.env, run(c)));
+
+// Der Bauplan selbst ist eine Datei, gezippt vom CDN. Im Worker würde das Packen bei jedem Abruf CPU-Zeit kosten.
+app.get('/rechenzentrum.plan.json', auth, (c) => c.env.ASSETS.fetch(c.req.raw));
 
 // Alles andere: die Single-Page-App
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));

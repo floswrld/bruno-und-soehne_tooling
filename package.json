@@ -2,12 +2,16 @@
   "name": "bruno-intranet",
   "version": "1.0.0",
   "description": "Internes Tooling der Bruno & Söhne GmbH",
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "lokal": "node scripts/lokal.mjs",
     "db:local": "wrangler d1 migrations apply bruno-intranet --local",
     "db:remote": "wrangler d1 migrations apply bruno-intranet --remote",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "bauplan:plan": "node scripts/gen-rechenzentrum.mjs",
+    "bauplan:sync": "node scripts/bauplan-sync.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.2.3",

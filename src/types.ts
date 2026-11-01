@@ -5,6 +5,7 @@ export type Env = {
   ASSETS: Fetcher;
   OAUTH_KV: KVNamespace; // OAuth-Clients, -Freigaben und -Tokens (nur als Hash)
   SETUP_TOKEN?: string;
+  BAUPLAN_SYNC_KEY?: string; // Schlüssel für scripts/bauplan-sync.mjs
 };
 
 export type User = {

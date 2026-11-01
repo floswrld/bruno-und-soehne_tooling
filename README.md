@@ -1,6 +1,6 @@
 # Bruno & Söhne Intranet
 
-Das interne Tooling der Bruno & Söhne GmbH: Login, Personalverwaltung, Zeiterfassung, Scrum-Board und (bald) der Bauplan.
+Das interne Tooling der Bruno & Söhne GmbH: Login, Personalverwaltung, Zeiterfassung, Scrum-Board und der Bauplan.
 
 Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Daten liegen in **D1** (SQLite). Für eine kleine Gruppe ist das im kostenlosen Tarif dauerhaft gratis.
 
@@ -11,7 +11,8 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 - **Zeiterfassung:** Ein- und Ausstempeln, Zeit nachtragen und korrigieren, Wochenansicht. Admins sehen die Zeiten aller Mitarbeiter. Die Fleißrangliste auf der Übersicht sehen alle.
 - **Scrum-Board:** Sprints mit Ziel und Zeitraum, fünf Spalten, Zuständige, Filter nach Mitarbeiter. Die Spalte einer Karte ändert sich nur per Drag & Drop, nicht im Bearbeiten-Dialog. Auf dem Handy: Karte lange drücken, dann ziehen.
 - **Teilaufgaben:** Aufgaben lassen sich in Teilaufgaben zerlegen (eine Ebene). Sie stehen als eigene Karten auf dem Board, laufen im Sprint der übergeordneten Aufgabe mit, und deren Karte zeigt den Fortschritt. Nach „Erledigt“ darf eine Aufgabe erst, wenn alle Teilaufgaben erledigt sind. Wird danach eine Teilaufgabe wieder geöffnet oder neu angelegt, geht die Aufgabe zurück in Arbeit.
-- **Bauplan:** Platzhalter, wird als Nächstes ausgebaut.
+- **Bauplan:** Das Rechenzentrum in 3D (120 × 200 × 40, Dachtechnik ragt darüber hinaus, innen hohl) mit Gelände. Den Innenausbau macht das Team selbst, er steht nicht im Plan. Ebene für Ebene ansehen, Block anklicken für Baustoff und Koordinate, Materialliste mit Stacks und Shulkern. Umschalten zwischen Gesamtbau, schon gebaut und noch offen. Der Plan steht im Code, hochladen kann niemand etwas.
+- **Hell und Dunkel:** Standard ist die Einstellung des Geräts, umschalten per Sonne/Mond-Knopf oder im Profil. Die Wahl liegt nur im Browser. Im Dunkeln ist im Bauplan Nacht, und die Lampen leuchten.
 
 **Sicherheit:** Passwörter als PBKDF2-SHA256 (100.000 Runden, Salt). Sitzungen als HttpOnly-Cookie, in der Datenbank nur als SHA-256-Hash gespeichert. Login-Sperre nach 8 Fehlversuchen in 15 Minuten. Schreibende Anfragen müssen JSON vom eigenen Origin sein (Schutz gegen CSRF). Schriften liegen lokal, es gehen keine Anfragen an Google.
 
@@ -87,9 +88,16 @@ Mit **Cloudflare Zero Trust → Access** (bis 50 Nutzer kostenlos) lässt sich v
 
 ```bash
 npm install
-echo "SETUP_TOKEN=lokal" > .dev.vars
-npm run db:local
-npm run dev                               # http://localhost:8787
+npm run lokal                             # http://localhost:8787, Anmeldung: test / testtest1234
+```
+
+Das bringt die lokale Datenbank auf den neuesten Stand, legt beim ersten Start den Test-Zugang an und füllt den Baufortschritt mit Beispieldaten. Änderungen an `public/` und `src/` sind nach dem Neuladen der Seite da. Alles liegt in `.wrangler/state` auf diesem Rechner, die echte Website bleibt unberührt. Neu anfangen: Server beenden und den Ordner `.wrangler/state` löschen.
+
+Den Abgleich testen, ohne etwas bei Aternos herunterzuladen: in einer Einzelspieler-Welt bauen, die Welt verlassen und im zweiten Terminal diese Welt melden. `--anker` ist die Stelle, an der die Nordwest-Ecke des Gebäudes stehen soll.
+
+```powershell
+$env:BAUPLAN_SYNC_KEY = "lokal"
+npm run bauplan:sync -- "$env:APPDATA\.minecraft\saves\New World (1)" --anker 0,-60,0 --url http://localhost:8787
 ```
 
 ## Aufbau
@@ -101,8 +109,35 @@ src/mcp.ts            MCP-Server für KI-Apps (nur Scrum-Board)
 src/oauth.ts          Anmeldung von KI-Apps (OAuth), Zustimmungsseite, Verbindungen
 src/crypto.ts         Passwort-Hashing, Tokens, Einmal-Passwörter
 migrations/           Datenbankschema (D1/SQLite)
-public/               Die App: index.html, app.js, styles.css, Schriften, Logo
+public/               Die App: index.html, app.js, thema.js, bauplan.js (3D), bloecke.js (Baustoffe), styles.css, Schriften, Logo
+public/vendor/three/  three.js (MIT), liegt lokal und wird nur auf der Bauplan-Seite geladen
+public/rechenzentrum.plan.json   Der Bauplan, nur angemeldet abrufbar (eigene Route in src/index.ts)
+src/rechenzentrum.meta.json      Prüfsumme und Blockzahl des Plans für den Worker
+scripts/rechenzentrum/   Der Plan im Code: Raster, Logo, Fassade, Dach, Gelände
+scripts/              Plan erzeugen (npm run bauplan:plan), mit der Welt abgleichen (npm run bauplan:sync)
 ```
+
+### Den Bauplan ändern
+
+Plan neu erzeugen: `npm run bauplan:plan`. Beim Erzeugen prüft das Skript: Gebäudemaße, unbekannte Block-IDs, kein Logo auf dem Dach, kein Kupfer, Innenraum frei und keine dunklen Flächen auf dem Dach (es rechnet das Licht wie das Spiel und ergänzt fehlende Leuchten selbst).
+
+### Bauplan mit der Welt abgleichen
+
+Der Abgleich liest eine Kopie der Minecraft-Welt und meldet, welche Blöcke des Plans schon stehen. Ein Durchlauf zählt jeden Block neu, abgebaute Blöcke werden also wieder offen.
+
+Einmalig einrichten:
+
+1. Die Tabelle anlegen, noch vor dem Deploy: `npm run db:remote`.
+2. Einen langen Zufallswert als Schlüssel setzen: `npx wrangler secret put BAUPLAN_SYNC_KEY`.
+3. In `scripts/gen-rechenzentrum.mjs` bei `ANKER` die Welt-Koordinate der unteren Nord-West-Ecke des Gebäudes eintragen, `npm run bauplan:plan` ausführen und deployen.
+
+Danach bei jedem Abgleich die Welt bei Aternos herunterladen (Server vorher stoppen, damit alles gespeichert ist) und melden:
+
+```bash
+BAUPLAN_SYNC_KEY=... npm run bauplan:sync -- pfad/zur/world.zip --url https://deine-adresse
+```
+
+Mit `--nur-pruefen` statt `--url` wird nur das Ergebnis angezeigt und nichts gemeldet. Wird der Plan geändert, zählt der alte Abgleich nicht mehr und muss neu laufen.
 
 Das Frontend kommt ohne Build-Schritt aus: einfaches JavaScript, direkt im Browser. Neue Datenbank-Änderungen kommen als weitere Datei in `migrations/` (z. B. `0002_bauplan.sql`) und werden mit `npm run db:remote` eingespielt.
 
