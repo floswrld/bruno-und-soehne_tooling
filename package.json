@@ -11,7 +11,9 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc",
     "bauplan:plan": "node scripts/gen-rechenzentrum.mjs",
-    "bauplan:sync": "node scripts/bauplan-sync.mjs"
+    "bauplan:sync": "node scripts/bauplan-sync.mjs",
+    "mod:bauen": "node scripts/mod-bauen.mjs",
+    "mod:test": "node scripts/mod-test.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.2.3",
