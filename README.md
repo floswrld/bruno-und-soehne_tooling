@@ -11,7 +11,7 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 - **Zeiterfassung:** Ein- und Ausstempeln, Zeit nachtragen und korrigieren, Wochenansicht. Admins sehen die Zeiten aller Mitarbeiter. Die Fleißrangliste auf der Übersicht sehen alle.
 - **Scrum-Board:** Sprints mit Ziel und Zeitraum, fünf Spalten, Zuständige, Filter nach Mitarbeiter. Die Spalte einer Karte ändert sich nur per Drag & Drop, nicht im Bearbeiten-Dialog. Auf dem Handy: Karte lange drücken, dann ziehen.
 - **Teilaufgaben:** Aufgaben lassen sich in Teilaufgaben zerlegen (eine Ebene). Sie stehen als eigene Karten auf dem Board, laufen im Sprint der übergeordneten Aufgabe mit, und deren Karte zeigt den Fortschritt. Nach „Erledigt“ darf eine Aufgabe erst, wenn alle Teilaufgaben erledigt sind. Wird danach eine Teilaufgabe wieder geöffnet oder neu angelegt, geht die Aufgabe zurück in Arbeit.
-- **Bauplan:** Das Rechenzentrum in 3D (120 × 200 × 40), nur die äußerste Schicht: Fassade und Dachfläche, ohne Gelände und Dachtechnik. Innen ist es hohl, den Ausbau macht das Team selbst. Ebene für Ebene ansehen, Block anklicken für Baustoff und Koordinate, Materialliste mit Stacks und Shulkern. Umschalten zwischen Gesamtbau, schon gebaut und noch offen. Der Plan steht im Code, hochladen kann niemand etwas.
+- **Bauplan:** Das Rechenzentrum in 3D (120 × 200 × 40), nur die äußerste Schicht: Fassade und Dachfläche, ohne Gelände und Dachtechnik. Innen ist es hohl, den Ausbau macht das Team selbst. Kamera: Ziehen dreht, rechte Maustaste verschiebt, das Rad zoomt zur Maus hin, WASD fährt, Doppelklick fliegt hin. Die Auto-Kamera hängt sich hinter den Spieler, der gerade baut. Ebene für Ebene ansehen, Block anklicken für Baustoff und Koordinate, Materialliste mit Stacks und Shulkern. Umschalten zwischen Gesamtbau, schon gebaut und noch offen. Der Plan steht im Code, hochladen kann niemand etwas.
 - **Live vom Minecraft-Server:** Mit der Mod „Bruno Live“ zeigt das Intranet in Echtzeit, wer online ist und wo jeder gerade steht, als Figur mit seinem Skin. Der Bauplan baut sich beim Bauen sofort mit: frische Blöcke leuchten auf, der Fortschritt zählt mit, die Kamera kann einem Spieler folgen. Siehe unten.
 - **Hell und Dunkel:** Standard ist die Einstellung des Geräts, umschalten per Sonne/Mond-Knopf oder im Profil. Die Wahl liegt nur im Browser. Im Dunkeln ist im Bauplan Nacht, und die Lampen leuchten.
 
@@ -128,7 +128,7 @@ public/haut.js        Skins laden, Köpfe für die Listen
 Aternos erlaubt keine eigenen Server-Mods, darum läuft der Abgleich im Client: eine kleine Fabric-Mod im CurseForge-Profil (Ordner `mod/`, Minecraft 26.3). Mod und Website hängen per WebSocket am **Live-Raum**, einem Durable Object (`src/liveraum.ts`). Nichts wird abgefragt:
 
 - Positionen gehen bis zu zehnmal pro Sekunde raus, mit Blickrichtung und Haltung (schleicht, sprintet, schlägt). Jede Mod meldet auch die Mitspieler in ihrer Sichtweite, auch solche ohne Mod.
-- Ein geänderter Block wird per Mixin im selben Tick erkannt und sofort gemeldet. Wer am nächsten dran stand, bekommt ihn im Feed gutgeschrieben.
+- Ein geänderter Block wird per Mixin im selben Tick erkannt und sofort gemeldet. Wer am nächsten dran stand, bekommt ihn im Feed gutgeschrieben. Betonpulver zählt als Beton derselben Farbe (auch im Datei-Abgleich).
 - Skins: echte Skins holt der Worker bei Mojang (`/api/live/haut/<hash>`), Standard-Skins schickt die Mod einmal mit.
 
 Einmalig einrichten:

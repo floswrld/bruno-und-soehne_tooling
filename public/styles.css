@@ -647,11 +647,33 @@ dialog[open] { animation: rise .22s var(--ease); }
 .bp-spielerliste button[aria-pressed="true"] { background: rgba(var(--tint), .08); box-shadow: inset 3px 0 0 var(--brass); }
 .bp-mod-chip { margin-left: auto; font-size: 11px; padding: 1px 7px; }
 
-/* Kamera folgt einem Spieler */
+/* Kamera folgt einem Spieler (von Hand oder Auto) */
 .bp-folgen {
-  position: absolute; left: 12px; bottom: 76px; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 12px; border-radius: 999px;
-  background: rgba(28, 20, 22, .84); color: #F2C14E; font-size: 13px; font-weight: 600;
+  position: absolute; right: 12px; bottom: 76px; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 12px; border-radius: 999px;
+  background: rgba(28, 20, 22, .84); color: #F2C14E; font-size: 13px; font-weight: 600; max-width: calc(100% - 24px);
 }
+.bp-folgen span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-folgen-auto::before {
+  content: ''; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; flex: none; background: #E5392F;
+  animation: bp-aufnahme 1.6s infinite;
+}
+@keyframes bp-aufnahme { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .bp-folgen-auto::before { animation: none; } }
+
+/* Hilfe zur Steuerung */
+.bp-hilfe-knopf {
+  margin-left: auto; width: 40px; min-height: 40px; border: 0; border-radius: var(--r-sm); pointer-events: auto; cursor: pointer;
+  background: rgba(28, 20, 22, .82); color: #E9E7E4; font-size: 15px; font-weight: 700;
+}
+.bp-hilfe-knopf:hover, .bp-hilfe-knopf[aria-expanded="true"] { background: var(--brass); color: var(--on-brass); }
+.bp-hilfe {
+  position: absolute; top: 60px; right: 12px; z-index: 3; width: min(320px, calc(100% - 24px)); padding: 12px 14px; border-radius: var(--r-sm);
+  background: rgba(28, 20, 22, .92); font-size: 13px; box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .6);
+}
+.bp-hilfe[hidden] { display: none; }
+.bp-hilfe dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 8px 0 0; }
+.bp-hilfe dt { color: var(--brass-light); font-weight: 600; white-space: nowrap; }
+.bp-hilfe dd { margin: 0; color: #D6D2CD; }
 .bp-folgen[hidden] { display: none; }
 .bp-folgen button { width: 28px; height: 28px; border: 0; border-radius: 50%; background: none; color: #fff; cursor: pointer; font-size: 14px; }
 .bp-folgen button:hover { background: rgba(255, 255, 255, .12); }

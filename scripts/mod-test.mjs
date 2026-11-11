@@ -98,6 +98,8 @@ let nummer = 0;
 let richtig = 0;
 let faelschlich = 0;
 let falschRichtig = 0;
+let pulverSoll = 0;
+let pulverGebaut = 0;
 plan.layers.forEach((schicht, y) => {
   let i = 0;
   for (const [, n, c] of schicht.matchAll(/(\d+)(\D)/g)) {
@@ -110,8 +112,13 @@ plan.layers.forEach((schicht, y) => {
         const gebaut = (bits[nummer >> 3] & (1 << (nummer & 7))) !== 0;
         // Stehen geblieben ist weißer Beton in x = -60, y 114..120, z -49..-30.
         const imBereich = wx === -60 && wy >= 114 && wy <= 120 && wz >= -49 && wz <= -30;
+        // Dazu weißes Betonpulver in x = -60, y 114..116, z -70..-66.
+        const imPulver = wx === -60 && wy >= 114 && wy <= 116 && wz >= -70 && wz <= -66;
         const soll = plan.palette[c].block;
-        if (gebaut && imBereich && soll === 'minecraft:white_concrete') richtig++;
+        if (imPulver && soll === 'minecraft:white_concrete') {
+          pulverSoll++;
+          if (gebaut) pulverGebaut++;
+        } else if (gebaut && imBereich && soll === 'minecraft:white_concrete') richtig++;
         else if (gebaut) faelschlich++;
         if (imBereich && soll !== 'minecraft:white_concrete' && falsch.get(nummer) === 'minecraft:white_concrete') falschRichtig++;
       }
@@ -122,4 +129,5 @@ plan.layers.forEach((schicht, y) => {
 melde('Gebaut steht an den richtigen Stellen', richtig > 0, `${richtig} Blöcke`);
 melde('Nichts steht fälschlich als gebaut da', faelschlich === 0, faelschlich);
 melde('Falsch gesetzte Blöcke erkannt', falschRichtig > 0, falschRichtig);
+melde('Betonpulver zählt als Beton', pulverSoll > 0 && pulverGebaut === pulverSoll, `${pulverGebaut} von ${pulverSoll}`);
 console.log(process.exitCode ? '\nTest fehlgeschlagen.' : '\nTest bestanden.');

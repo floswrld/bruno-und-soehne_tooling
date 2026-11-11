@@ -72,6 +72,11 @@ public class LiveSyncGameTest implements FabricClientGameTest {
 			zeit("abbauen");
 			server.runCommand("fill -60 114 -60 -60 120 -50 minecraft:air");
 			kontext.waitTicks(4 * SEKUNDE);
+			// Betonpulver zählt als Beton. Darunter Stein, sonst fällt es herunter.
+			zeit("pulver");
+			server.runCommand("fill -60 113 -70 -60 113 -66 minecraft:stone");
+			server.runCommand("fill -60 114 -70 -60 116 -66 minecraft:white_concrete_powder");
+			kontext.waitTicks(4 * SEKUNDE);
 			zeit("ende");
 		}
 	}

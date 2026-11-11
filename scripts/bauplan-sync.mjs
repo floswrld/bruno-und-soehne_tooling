@@ -215,7 +215,9 @@ function abgleichen(quelle, anker) {
       const z = (zaehler[b.abschnitt] ??= { gesamt: 0, gebaut: 0 });
       z.gesamt++;
       if (!chunk) continue;
-      const ist = blockIn(sektionen, chunk.buf, b.wx & 15, b.wy, b.wz & 15);
+      // Betonpulver zählt als Beton derselben Farbe (wird oft als Pulver gesetzt und erst später gehärtet).
+      const roh = blockIn(sektionen, chunk.buf, b.wx & 15, b.wy, b.wz & 15);
+      const ist = roh?.endsWith('_concrete_powder') ? roh.slice(0, -'_powder'.length) : roh;
       if (ist === b.soll) {
         bits[b.nummer >> 3] |= 1 << (b.nummer & 7);
         gebautAnzahl++;

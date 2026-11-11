@@ -1,8 +1,8 @@
 // Bauplan des Rechenzentrums: 3D-Ansicht, Ebenen, Baufortschritt, Materialliste, live mitlaufende Spieler.
 // Wird erst geladen, wenn jemand die Seite öffnet.
 import * as THREE from '/vendor/three/three.module.min.js';
-import { OrbitControls } from '/vendor/three/OrbitControls.js';
 import { BLOECKE } from '/bloecke.js';
+import { Kamerafuehrung } from '/kamera.js';
 import { Bewegung, figurBauen } from '/figur.js';
 import { ersatzHaut, hautLaden, hautVergessen, kopfBild } from '/haut.js';
 
@@ -433,15 +433,32 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
         <div class="bp-kompass" aria-hidden="true"></div>
         <div class="bp-spieler-namen" aria-hidden="true"></div>
         <div class="bp-anker-schild" aria-hidden="true" hidden><b>Hier einmessen</b><span>${esc(blockName(ecke.block))}, unterste Nordwest-Ecke</span></div>
-        <div class="bp-folgen" hidden><span data-folgen-name></span><button type="button" data-folgen-aus aria-label="Nicht mehr folgen">✕</button></div>
+        <div class="bp-folgen" hidden><span data-folgen-name></span><button type="button" data-folgen-aus aria-label="Kamera wieder frei">✕</button></div>
         <div class="bp-laden" role="status"></div>
         <div class="bp-oben">
           <div class="bp-seg" role="group" aria-label="Blickrichtung">
             ${[['iso', 'Schräg'], ['plan', 'Grundriss'], ['west', 'West'], ['nord', 'Nord'], ['ost', 'Ost'], ['sued', 'Süd']].map(([k, t]) => `<button type="button" data-blick="${k}">${t}</button>`).join('')}
           </div>
+          <div class="bp-seg" role="group" aria-label="Kamera">
+            <button type="button" data-auto aria-pressed="false" title="Kamera folgt automatisch dem Spieler, der gerade baut">Auto</button>
+          </div>
           <div class="bp-seg" role="group" aria-label="Was gezeigt wird">
             ${MODI.map(([k, t]) => `<button type="button" data-modus="${k}">${t}</button>`).join('')}
           </div>
+          <button type="button" class="bp-hilfe-knopf" data-hilfe aria-expanded="false" aria-label="Steuerung anzeigen">?</button>
+        </div>
+        <div class="bp-hilfe" hidden>
+          <b>Steuerung</b>
+          <dl>
+            <dt>Ziehen</dt><dd>drehen</dd>
+            <dt>Rechts ziehen · Shift</dt><dd>verschieben</dd>
+            <dt>Mausrad</dt><dd>zoomen, zur Maus hin</dd>
+            <dt>Doppelklick</dt><dd>hinfliegen</dd>
+            <dt>W A S D · Pfeile</dt><dd>fahren, Shift schneller</dd>
+            <dt>Q / E · R / F</dt><dd>drehen · zoomen</dd>
+            <dt>Spieler in der Liste</dt><dd>Kamera folgt</dd>
+            <dt>Auto</dt><dd>hinter dem Spieler, der gerade baut</dd>
+          </dl>
         </div>
         <div class="bp-info" hidden></div>
         <div class="bp-unten">
@@ -606,13 +623,9 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   boden.receiveShadow = true;
   szene.add(boden);
 
-  const kamera = new THREE.PerspectiveCamera(40, 1, 2, 5000);
-  const steuerung = new OrbitControls(kamera, canvas);
+  const kamera = new THREE.PerspectiveCamera(40, 1, 1, 5000);
   const mitte = new THREE.Vector3(g.x + g.breite / 2, 12, g.z + g.tiefe / 2);
-  steuerung.target.copy(mitte);
-  steuerung.maxPolarAngle = Math.PI / 2 - 0.01;
-  steuerung.minDistance = 8;
-  steuerung.maxDistance = 1800;
+  const kf = new Kamerafuehrung(kamera, canvas, { mitte, beiAenderung: () => zeichnen(), beiModus: () => kameraModusZeigen() });
 
   const BLICKE = {
     iso: [-250, 165, 260],
@@ -621,27 +634,26 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     nord: [0, 36, -420],
     sued: [0, 36, 420],
   };
-  function blick(name) {
-    if (name === 'plan') return grundrissBlick();
-    const v = BLICKE[name];
-    // Auf schmalen Bildschirmen weiter weg, damit das Gebäude in die Breite passt. Auf breiten näher ran.
-    const f = Math.max(0.78, 1.15 / kamera.aspect);
-    steuerung.target.copy(mitte);
-    kamera.position.set(mitte.x + v[0] * f, mitte.y + v[1] * f, mitte.z + v[2] * f);
-    steuerung.update();
-    zeichnen();
-  }
-
-  function grundrissBlick() {
-    const quer = kamera.aspect >= 1.05;
-    const tan = Math.tan((kamera.fov * Math.PI) / 360);
-    const lang = g.tiefe + 44;
-    const kurz = g.breite + 44;
-    const abstand = Math.max((quer ? lang : kurz) / 2 / (tan * kamera.aspect), (quer ? kurz : lang) / 2 / tan) * 1.12;
-    steuerung.target.copy(mitte);
-    // Der kleine Versatz legt fest, wo oben ist: Quer liegt Osten oben, Norden links.
-    kamera.position.set(mitte.x + (quer ? -0.6 : 0), mitte.y + abstand, mitte.z + (quer ? 0 : 0.6));
-    steuerung.update();
+  // Blickrichtungen werden angeflogen, nur beim ersten Bild geht es sofort.
+  function blick(name, sofort = false) {
+    let pos;
+    if (name === 'plan') {
+      const quer = kamera.aspect >= 1.05;
+      const tan = Math.tan((kamera.fov * Math.PI) / 360);
+      const lang = g.tiefe + 44;
+      const kurz = g.breite + 44;
+      const abstand = Math.max((quer ? lang : kurz) / 2 / (tan * kamera.aspect), (quer ? kurz : lang) / 2 / tan) * 1.12;
+      // Der kleine Versatz legt fest, wo oben ist: Quer liegt Osten oben, Norden links.
+      pos = new THREE.Vector3(mitte.x + (quer ? -0.6 : 0), mitte.y + abstand, mitte.z + (quer ? 0 : 0.6));
+    } else {
+      const v = BLICKE[name];
+      // Auf schmalen Bildschirmen weiter weg, damit das Gebäude in die Breite passt. Auf breiten näher ran.
+      const f = Math.max(0.78, 1.15 / kamera.aspect);
+      pos = new THREE.Vector3(mitte.x + v[0] * f, mitte.y + v[1] * f, mitte.z + v[2] * f);
+    }
+    kf.modusSetzen('frei');
+    if (sofort) kf.sofort(mitte, pos);
+    else kf.fliegeZu(mitte, pos);
     zeichnen();
   }
 
@@ -771,7 +783,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
 
   // ---------- Zeichnen ----------
 
-  // Gezeichnet wird nur bei Bedarf. Solange sich eine Figur bewegt, Bild für Bild.
+  // Gezeichnet wird nur bei Bedarf. Solange sich eine Figur oder die Kamera bewegt, Bild für Bild.
   let geplant = false;
   let tot = false;
   let letztesBild = 0;
@@ -781,9 +793,11 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     requestAnimationFrame((t) => {
       geplant = false;
       if (tot) return;
-      const dt = letztesBild ? Math.min(0.1, (t - letztesBild) / 1000) : 0;
+      const dt = letztesBild ? Math.min(0.1, (t - letztesBild) / 1000) : 1 / 60;
       letztesBild = t;
-      const weiter = figurenBewegen(dt);
+      const figurenLaufen = figurenBewegen(dt);
+      const kameraLaeuft = kf.update(dt);
+      const weiter = figurenLaufen || kameraLaeuft;
       renderer.render(szene, kamera);
       const b = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -794,7 +808,11 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
       else letztesBild = 0;
     });
   }
-  steuerung.addEventListener('change', zeichnen);
+  // Zurück im Tab: weiterzeichnen, falls gerade etwas lief (Auto-Kamera, Figuren).
+  const wiederSichtbar = () => {
+    if (!document.hidden) zeichnen();
+  };
+  document.addEventListener('visibilitychange', wiederSichtbar);
 
   function anpassen() {
     const b = buehne.clientWidth;
@@ -909,6 +927,17 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     if (!festgehalten) infoZeigen(null);
   });
 
+  // Doppelklick: dorthin fliegen. Auf einen Block, sonst auf den Boden.
+  const bodenEbene = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  canvas.addEventListener('dblclick', (e) => {
+    const t = blockTreffen(e);
+    let punkt = t ? new THREE.Vector3(t.x + 0.5, t.y + 0.5, t.z + 0.5) : null;
+    if (!punkt) punkt = strahl.ray.intersectPlane(bodenEbene, new THREE.Vector3());
+    if (!punkt) return;
+    kf.fokus(punkt);
+    zeichnen();
+  });
+
   // ---------- Bedienung ----------
 
   function modusZeigen() {
@@ -928,12 +957,22 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
       geometrieBauen();
     })
   );
-  $$('[data-blick]').forEach((b) =>
-    b.addEventListener('click', () => {
-      folgenBeenden();
-      blick(b.dataset.blick);
-    })
-  );
+  $$('[data-blick]').forEach((b) => b.addEventListener('click', () => blick(b.dataset.blick)));
+  $('[data-auto]').addEventListener('click', () => {
+    if (kf.modus === 'auto') {
+      kf.modusSetzen('frei');
+    } else {
+      autoFest = null;
+      kf.modusSetzen('auto');
+    }
+    zeichnen();
+  });
+  const hilfeKnopf = $('[data-hilfe]');
+  const hilfe = $('.bp-hilfe');
+  hilfeKnopf.addEventListener('click', () => {
+    hilfe.hidden = !hilfe.hidden;
+    hilfeKnopf.setAttribute('aria-expanded', String(!hilfe.hidden));
+  });
   $('input[type=range]').addEventListener('input', (e) => {
     sicht.ebene = Number(e.target.value);
     ebenenZeigen();
@@ -1064,7 +1103,12 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   const positionen = new Map(); // Name -> letzte Meldung [Name, x, y, z, Körper, Kopf, Nicken, Merker, Dimension]
   const namenBox = $('.bp-spieler-namen');
   let beobachtet = false;
-  let folge = null;
+  let folgeName = null; // Spieler, dem die Kamera im Modus „folgen“ nachgeht
+  let autoFest = null; // in der Liste angeklickt: Auto bleibt bei diesem Spieler
+  let autoSeit = 0;
+  const aktiv = new Map(); // Name -> { gebaut, bewegt } (performance.now)
+  // Wem die Kamera gerade folgt, egal ob von Hand oder automatisch.
+  const imBild = () => (kf.modus === 'folgen' ? folgeName : kf.modus === 'auto' ? kf.auto.name ?? null : null);
 
   const aufsPlan = (w) => ({ x: w[1] - anker.x + g.x, y: w[2] - anker.y + g.y, z: w[3] - anker.z + g.z, koerper: w[4], kopf: w[5], nicken: w[6], merker: w[7] });
   const hautVon = (name) => online.get(name)?.haut ?? null;
@@ -1117,28 +1161,97 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     }
     f.el.remove();
     figuren.delete(name);
-    if (folge === name) folgenBeenden();
+    if (kf.modus === 'folgen' && folgeName === name) kf.modusSetzen('frei');
     listePlanen();
   }
 
   // Beim Herauszoomen wachsen die Figuren mit, sonst wären sie im Gesamtbild nur Pünktchen.
-  const vorherPos = new THREE.Vector3();
   function figurenBewegen(dt) {
     let weiter = false;
+    const jetzt = performance.now();
     for (const [name, f] of figuren) {
       if (!f.figur) continue;
-      vorherPos.copy(f.bew.pos);
       if (f.bew.schritt(dt, f.figur)) weiter = true;
+      if (f.bew.schwung > 0.15) aktivMerken(name, 'bewegt', jetzt);
       f.groesse = Math.min(6, Math.max(1, kamera.position.distanceTo(f.bew.pos) / 90));
       f.figur.wurzel.scale.setScalar(f.groesse);
-      if (folge === name) {
-        vorherPos.subVectors(f.bew.pos, vorherPos);
-        steuerung.target.add(vorherPos);
-        kamera.position.add(vorherPos);
-      }
     }
+    autoWaehlen(jetzt);
     return weiter;
   }
+
+  // ---------- Kamera: Folgen und Auto ----------
+
+  function aktivMerken(name, art, jetzt = performance.now()) {
+    if (!name) return;
+    const a = aktiv.get(name) ?? { gebaut: -Infinity, bewegt: -Infinity };
+    a[art] = jetzt;
+    aktiv.set(name, a);
+  }
+  // Wer gerade baut, zählt wie eine Minute frischer als wer nur läuft.
+  const wertung = (name) => {
+    const a = aktiv.get(name);
+    return a ? Math.max(a.gebaut + 60_000, a.bewegt) : -Infinity;
+  };
+
+  // Auto-Kamera: Wen zeigen? Erst wer baut, dann wer läuft. Gewechselt wird frühestens nach 12 Sekunden,
+  // damit das Bild nicht hin und her springt.
+  function autoWaehlen(jetzt) {
+    if (kf.modus !== 'auto') return;
+    let name = autoFest && figuren.has(autoFest) ? autoFest : null;
+    if (!name) {
+      const aktuell = kf.auto.name && figuren.has(kf.auto.name) ? kf.auto.name : null;
+      let best = aktuell;
+      for (const n of figuren.keys()) if (best === null || wertung(n) > wertung(best)) best = n;
+      const bleiben = aktuell && best !== aktuell && (jetzt - autoSeit < 12_000 || wertung(best) < wertung(aktuell) + 5_000);
+      name = bleiben ? aktuell : best;
+    }
+    const bew = name ? figuren.get(name).bew : null;
+    if (name === (kf.auto.name ?? null) && kf.auto.ziel === bew) return;
+    kf.autoZiel(name, bew);
+    autoSeit = jetzt;
+    kameraModusZeigen();
+    listePlanen();
+  }
+
+  // Anzeige unten links und der Auto-Knopf
+  const folgenBox = $('.bp-folgen');
+  function kameraModusZeigen() {
+    const name = imBild();
+    $('[data-auto]').setAttribute('aria-pressed', String(kf.modus === 'auto'));
+    folgenBox.hidden = kf.modus === 'frei';
+    folgenBox.classList.toggle('bp-folgen-auto', kf.modus === 'auto');
+    $('[data-folgen-name]').textContent =
+      kf.modus === 'auto'
+        ? name
+          ? `Auto-Kamera · ${name}${autoFest ? ' (fest)' : ''}`
+          : 'Auto-Kamera · niemand im Bild'
+        : `Kamera folgt ${name ?? ''}`;
+    listePlanen();
+  }
+
+  // Spieler in der Liste angeklickt: von Hand folgen, oder in Auto diesen Spieler festhalten.
+  function spielerGewaehlt(name) {
+    if (kf.modus === 'auto') {
+      autoFest = autoFest === name ? null : name;
+      autoSeit = 0;
+      autoWaehlen(performance.now());
+      kameraModusZeigen();
+      zeichnen();
+      return;
+    }
+    if (kf.modus === 'folgen' && folgeName === name) {
+      kf.modusSetzen('frei');
+      return;
+    }
+    const f = figuren.get(name);
+    if (!f) return;
+    folgeName = name;
+    kf.folgen(f.bew);
+    kameraModusZeigen();
+    zeichnen();
+  }
+  $('[data-folgen-aus]').addEventListener('click', () => kf.modusSetzen('frei'));
 
   function spielerNamenZeigen(b, h) {
     for (const f of figuren.values()) {
@@ -1150,28 +1263,6 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
       if (sichtbar) f.el.style.transform = `translate(${((hilf.x + 1) / 2) * b}px, ${((1 - hilf.y) / 2) * h}px) translate(-50%, -100%)`;
     }
   }
-
-  // Kamera hängt sich an einen Spieler. Drehen und Zoomen geht weiter, die Ansicht wandert mit.
-  const folgenBox = $('.bp-folgen');
-  function folgen(name) {
-    const f = figuren.get(name);
-    if (!f) return;
-    folge = name;
-    steuerung.target.set(f.bew.pos.x, f.bew.pos.y + 1, f.bew.pos.z);
-    kamera.position.set(f.bew.pos.x - 26, f.bew.pos.y + 20, f.bew.pos.z + 26);
-    steuerung.update();
-    folgenBox.hidden = false;
-    $('[data-folgen-name]').textContent = `Kamera folgt ${name}`;
-    listePlanen();
-    zeichnen();
-  }
-  function folgenBeenden() {
-    if (!folge) return;
-    folge = null;
-    folgenBox.hidden = true;
-    listePlanen();
-  }
-  $('[data-folgen-aus]').addEventListener('click', folgenBeenden);
 
   // ---------- Live: Liste und Feed ----------
 
@@ -1199,7 +1290,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     chip.className = `chip ${beobachtet ? 'ok' : 'off'}`;
     const el = $('[data-live-spieler]');
     el.innerHTML = liste.length
-      ? `<ul class="bp-spielerliste">${liste.map((s) => `<li><button type="button" data-spieler="${esc(s.name)}" ${figuren.has(s.name) ? '' : 'disabled'} aria-pressed="${folge === s.name}" title="${figuren.has(s.name) ? 'Kamera folgt diesem Spieler' : ''}">
+      ? `<ul class="bp-spielerliste">${liste.map((s) => `<li><button type="button" data-spieler="${esc(s.name)}" ${figuren.has(s.name) ? '' : 'disabled'} aria-pressed="${imBild() === s.name}" title="${figuren.has(s.name) ? (kf.modus === 'auto' ? 'Auto-Kamera bei diesem Spieler festhalten' : 'Kamera folgt diesem Spieler') : ''}">
             <img class="bp-kopf" data-kopf="${esc(s.name)}" alt="" width="24" height="24">
             <span class="bp-zone-name">${esc(s.name)}${s.mitarbeiter ? ` <span class="muted">(${esc(s.mitarbeiter)})</span>` : ''}<small data-wo="${esc(s.name)}">${esc(wo(s))}</small></span>
             ${s.mit_mod ? '<span class="chip ok bp-mod-chip">Mod</span>' : ''}
@@ -1208,7 +1299,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     el.querySelectorAll('img[data-kopf]').forEach(async (img) => {
       img.src = await kopfBild(hautVon(img.dataset.kopf));
     });
-    el.querySelectorAll('[data-spieler]').forEach((b) => b.addEventListener('click', () => (folge === b.dataset.spieler ? folgenBeenden() : folgen(b.dataset.spieler))));
+    el.querySelectorAll('[data-spieler]').forEach((b) => b.addEventListener('click', () => spielerGewaehlt(b.dataset.spieler)));
   }
   // Koordinaten in der Liste: nur den Text tauschen, viermal pro Sekunde.
   let koordinatenGeplant = false;
@@ -1228,7 +1319,10 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   const ereignisse = new Map();
   function feedZeigen(neue, ersetzen = false) {
     if (ersetzen) ereignisse.clear();
-    for (const e of neue) ereignisse.set(e.id, e);
+    for (const e of neue) {
+      ereignisse.set(e.id, e);
+      if (!ersetzen && e.mc_name) aktivMerken(e.mc_name, 'gebaut');
+    }
     const liste = [...ereignisse.values()].sort((a, b) => b.id - a.id).slice(0, 30);
     $('[data-live-feed]').innerHTML = liste.length
       ? liste.map((e) => {
@@ -1289,10 +1383,8 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   }
   function eckeAnsehen() {
     eckeAngefordert = true;
-    folgenBeenden();
-    steuerung.target.set(ecke.x + 0.5, ecke.y + 2, ecke.z + 0.5);
-    kamera.position.set(ecke.x - 34, ecke.y + 24, ecke.z - 30);
-    steuerung.update();
+    kf.modusSetzen('frei');
+    kf.fliegeZu(new THREE.Vector3(ecke.x + 0.5, ecke.y + 2, ecke.z + 0.5), new THREE.Vector3(ecke.x - 34, ecke.y + 24, ecke.z - 30));
     zeichnen();
   }
 
@@ -1424,7 +1516,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   standortZeigen();
   themaAnwenden();
   anpassen();
-  blick('iso');
+  blick('iso', true);
   geometrieBauen();
   liveEmpfangen({ t: 'start', ...start });
 
@@ -1438,8 +1530,9 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     eckRahmen.geometry.dispose();
     eckSaeule.geometry.dispose();
     document.removeEventListener('thema', themaAnwenden);
+    document.removeEventListener('visibilitychange', wiederSichtbar);
     groesse.disconnect();
-    steuerung.dispose();
+    kf.dispose();
     atlas.tex.dispose();
     wiese.dispose();
     stufen.forEach((s) => [s.voll, s.deckel, s.glas, s.geist].forEach((gruppe) => gruppe.children.forEach((m) => m.geometry.dispose())));
