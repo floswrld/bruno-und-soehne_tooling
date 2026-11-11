@@ -482,6 +482,8 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
         <section class="panel bp-tafel" data-tafel="live">
           <div class="panel-head"><h2>Live</h2><span class="chip off" data-live-chip>keine Daten</span></div>
           <div data-live-spieler></div>
+          <h3 class="bp-zwischen">Gebaut von</h3>
+          <ol class="bp-bauer" data-live-bauer></ol>
           <h3 class="bp-zwischen">Zuletzt am Bau</h3>
           <ol class="bp-feed" data-live-feed></ol>
           <div data-live-standort></div>
@@ -1316,6 +1318,58 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     }, 250);
   }
 
+  // ---------- Live: Wer wie viel gebaut hat ----------
+  // Gezählt werden Blöcke, die gerade richtig im Bau stehen. Wer einen Block abbaut, nimmt ihn dem Bauer wieder weg.
+
+  let bauer = { liste: [], ohne: 0 };
+  const koepfeFertig = new Map(); // Skin-Schlüssel -> Bild-Adresse, damit beim Neuzeichnen nichts flackert
+  let bauerGeplant = false;
+  function bauerPlanen(b) {
+    if (b) bauer = { liste: b.liste ?? [], ohne: b.ohne ?? 0 };
+    if (bauerGeplant) return;
+    bauerGeplant = true;
+    requestAnimationFrame(() => {
+      bauerGeplant = false;
+      if (!tot) bauerZeigen();
+    });
+  }
+  function bauerZeigen() {
+    const el = $('[data-live-bauer]');
+    const { liste, ohne } = bauer;
+    const meiste = Math.max(1, ...liste.map((b) => b.anzahl), ohne);
+    const anteil = (n) => {
+      const p = (100 * n) / plan.gesamt;
+      return `${p < 0.01 ? 'unter 0,01' : p.toLocaleString('de-DE', { maximumFractionDigits: p < 1 ? 2 : 1 })} % des Gebäudes`;
+    };
+    const zeile = (inhalt, n, klasse = '') => `<li class="${klasse}">${inhalt}<b class="bp-bauer-zahl">${zahl.format(n)}</b><i class="bp-bauer-balken" style="width:calc((100% - 24px) * ${(n / meiste).toFixed(4)})"></i></li>`;
+    const zeilen = liste.map((b, k) => {
+      const haut = online.get(b.name)?.haut ?? b.haut;
+      const bild = koepfeFertig.get(hautSchluessel(haut));
+      return zeile(
+        `<span class="bp-bauer-platz">${k + 1}</span>
+        <img class="bp-kopf" data-bauer-kopf="${esc(b.name)}" ${bild ? `src="${bild}"` : ''} alt="" width="24" height="24">
+        <span class="bp-zone-name">${esc(b.name)}${b.mitarbeiter ? ` <span class="muted">(${esc(b.mitarbeiter)})</span>` : ''}<small>${anteil(b.anzahl)}</small></span>`,
+        b.anzahl
+      );
+    });
+    if (ohne) {
+      zeilen.push(zeile(
+        `<span class="bp-bauer-platz"></span><span class="bp-kopf bp-kopf-leer" aria-hidden="true">?</span>
+        <span class="bp-zone-name">Ohne Zuordnung<small>Beim Setzen hat keiner mit der Mod zugesehen</small></span>`,
+        ohne,
+        'bp-bauer-ohne'
+      ));
+    }
+    el.innerHTML = zeilen.length ? zeilen.join('') : '<li class="small muted">Noch kein Block gebaut.</li>';
+    el.querySelectorAll('img[data-bauer-kopf]:not([src])').forEach(async (img) => {
+      const b = liste.find((x) => x.name === img.dataset.bauerKopf);
+      const haut = online.get(b.name)?.haut ?? b.haut;
+      const bild = await kopfBild(haut);
+      koepfeFertig.set(hautSchluessel(haut), bild);
+      img.src = bild;
+    });
+  }
+
   const ereignisse = new Map();
   function feedZeigen(neue, ersetzen = false) {
     if (ersetzen) ereignisse.clear();
@@ -1455,6 +1509,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     for (const s of m.spieler) online.set(s.name, s);
     for (const [name, f] of figuren) if (f.hautKey !== hautSchluessel(hautVon(name))) figurAnlegen(name);
     listePlanen();
+    bauerPlanen();
   }
 
   function liveEmpfangen(m) {
@@ -1470,6 +1525,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
         positionen.clear();
         for (const w of m.pos) positionAnwenden(w);
         standAnwenden(m.fortschritt);
+        bauerPlanen(m.bauer);
         feedZeigen(m.feed, true);
         zeichnen();
         break;
@@ -1488,6 +1544,10 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
         break;
       case 'stand':
         standAnwenden(m.fortschritt);
+        if (m.bauer) bauerPlanen(m.bauer);
+        break;
+      case 'bauer':
+        bauerPlanen(m);
         break;
       case 'feed':
         feedZeigen([m.eintrag]);
@@ -1499,7 +1559,9 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
           f.hautKey = null;
           figurAnlegen(name);
         }
+        for (const [key] of koepfeFertig) if (key.startsWith(`${m.res}|`)) koepfeFertig.delete(key);
         listePlanen();
+        bauerPlanen();
         break;
     }
   }

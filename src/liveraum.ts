@@ -3,8 +3,8 @@
 // gesetzte Blöcke sofort. Es wird nichts abgefragt.
 //
 // Gespeichert wird im Speicher des Objekts selbst, gesammelt alle zwei Sekunden: ein Bitfeld über alle Planblöcke,
-// die falsch gesetzten Blöcke, die letzten Einträge im Feed und der Standort. Positionen und die Tab-Liste sind
-// flüchtig, die Mods schicken sie ohnehin laufend.
+// wer jeden davon gebaut hat, die falsch gesetzten Blöcke, die letzten Einträge im Feed und der Standort.
+// Positionen und die Tab-Liste sind flüchtig, die Mods schicken sie ohnehin laufend.
 import { DurableObject } from 'cloudflare:workers';
 import plan from './rechenzentrum.meta.json';
 import type { Env } from './types';
@@ -20,7 +20,8 @@ type PosWerte = [string, number, number, number, number, number, number, number,
 type Position = { werte: PosWerte; am: number; selbst: boolean; quelle: WebSocket };
 type Zustand = 0 | 1 | string; // offen, gebaut, falscher Block
 type Eintrag = { id: number; mc_name: string; plus: number; minus: number; falsch: number; bloecke: Record<string, number>; von: number; am: number };
-type Gespeichert = { hash: string; gebaut: Uint8Array; falsch: [number, string][]; gemeldet: boolean };
+// wer[i]: wer Planblock i gebaut hat, als Nummer in bauer (ab 1). 0 heißt: nicht gesehen, wer es war.
+type Gespeichert = { hash: string; gebaut: Uint8Array; falsch: [number, string][]; gemeldet: boolean; wer?: Uint8Array; bauer?: string[] };
 
 const NAME = /^[A-Za-z0-9_.*-]{1,32}$/;
 const BLOCK = /^[a-z0-9_.-]+:[a-z0-9_/.-]{1,80}$/;
@@ -35,6 +36,9 @@ const FEED_FENSTER = 60_000; // Was jemand innerhalb einer Minute baut, ist ein 
 const POS_ALT = 5000; // Die Mods melden spätestens alle zwei Sekunden, wen sie sehen.
 const SELBST_VORRANG = 1500; // Die eigene Meldung eines Spielers geht vor dem, was andere von ihm sehen.
 const SPEICHERN_MS = 2000;
+const BAUER_MAX = 255; // passt in ein Byte je Planblock
+// Alles, was schon stand, bevor gezählt wurde, hat Bruno_Soehne gebaut (Angabe der Geschäftsführung, November 2026).
+const ERSTER_BAUER = 'Bruno_Soehne';
 
 const zahl = (v: unknown, grenze: number): number | null => (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= grenze ? v : null);
 const runden = (v: number, stellen: number) => Math.round(v * stellen) / stellen;
@@ -82,11 +86,17 @@ export class LiveRaum extends DurableObject<Env> {
   private falsch = new Map<number, string>();
   private gemeldet = false; // gibt es überhaupt schon Daten?
   private feed: Eintrag[] = [];
+  private wer = new Uint8Array(plan.gesamt);
+  private bauer: string[] = []; // Minecraft-Namen, wie sie gemeldet wurden
+  private bauerNr = new Map<string, number>(); // Name (klein) -> Nummer in wer
+  private proBauer: number[] = [0]; // stehende Blöcke je Nummer, [0] = ohne Zuordnung
+  private bauerText = '';
+  private skins: Record<string, Haut> = {}; // Name (klein) -> zuletzt gesehener Skin, nur für Bauer
   private namen: Record<string, string> = {}; // Minecraft-Name (klein) -> Mitarbeiter
   private tab = new Map<WebSocket, TabEintrag[]>();
   private pos = new Map<string, Position>();
   private haeute = new Map<string, string>();
-  private schmutzig = new Set<'stand' | 'feed' | 'namen'>();
+  private schmutzig = new Set<'stand' | 'feed' | 'namen' | 'skins'>();
   private alarmGesetzt = false;
   private online = '';
   private soll: { bloecke: string[]; index: Uint16Array } | null = null;
@@ -100,11 +110,12 @@ export class LiveRaum extends DurableObject<Env> {
 
   private async laden() {
     const s = this.ctx.storage;
-    const [einstellung, stand, feed, namen] = await Promise.all([
+    const [einstellung, stand, feed, namen, skins] = await Promise.all([
       s.get<{ anker: Anker | null; server: string }>('einstellung'),
       s.get<Gespeichert>('stand'),
       s.get<Eintrag[]>('feed'),
       s.get<Record<string, string>>('namen'),
+      s.get<Record<string, Haut>>('skins'),
     ]);
     if (einstellung) {
       this.einstellung = einstellung;
@@ -125,8 +136,19 @@ export class LiveRaum extends DurableObject<Env> {
       this.falsch = new Map(stand.falsch);
       this.gemeldet = stand.gemeldet;
       this.feed = feed ?? [];
+      if (stand.wer?.length === plan.gesamt && Array.isArray(stand.bauer)) {
+        this.wer = new Uint8Array(stand.wer);
+        this.bauerSetzen(stand.bauer);
+      } else {
+        // Stand von vor dem Zähler: Was schon gebaut ist, geht an den, der es gebaut hat.
+        this.bauerSetzen([ERSTER_BAUER]);
+        for (let i = 0; i < plan.gesamt; i++) if (this.zustand(i) === 1) this.wer[i] = 1;
+        await s.put('stand', this.standZumSpeichern());
+      }
     }
+    this.bauerZaehlen();
     this.namen = namen ?? {};
+    this.skins = skins ?? {};
   }
 
   // ---------- Verbindungen ----------
@@ -242,11 +264,14 @@ export class LiveRaum extends DurableObject<Env> {
         this.onlineSenden();
         return;
       }
-      case 'tab':
+      case 'tab': {
         if (!a.aktiv) return;
-        this.tab.set(ws, tabPruefen(m.liste));
+        const liste = tabPruefen(m.liste);
+        this.tab.set(ws, liste);
+        for (const e of liste) this.skinMerken(e);
         this.onlineSenden();
         return;
+      }
       case 'pos':
         if (a.aktiv) this.positionen(ws, a, m);
         return;
@@ -290,11 +315,15 @@ export class LiveRaum extends DurableObject<Env> {
     return this.falsch.get(i) ?? (this.gebaut[i >> 3] & (1 << (i & 7)) ? 1 : 0);
   }
 
-  private setzen(i: number, s: Zustand) {
+  // nr: wer den Block gebaut hat (nur bei s = 1). Fällt ein Block weg, zählt er für niemanden mehr.
+  private setzen(i: number, s: Zustand, nr = 0) {
+    if (this.zustand(i) === 1) this.proBauer[this.wer[i]]--;
     if (s === 1) this.gebaut[i >> 3] |= 1 << (i & 7);
     else this.gebaut[i >> 3] &= ~(1 << (i & 7));
     if (typeof s === 'string') this.falsch.set(i, s);
     else this.falsch.delete(i);
+    this.wer[i] = s === 1 ? nr : 0;
+    if (s === 1) this.proBauer[nr]++;
   }
 
   private async bloecke(ws: WebSocket, a: Anhang, m: Record<string, unknown>) {
@@ -313,10 +342,11 @@ export class LiveRaum extends DurableObject<Env> {
       if (this.zustand(i) === s) continue;
       if (typeof s === 'string' && !this.falsch.has(i) && this.falsch.size >= FALSCH_MAX) continue;
       const vorher = this.zustand(i);
-      this.setzen(i, s);
+      // Beim ersten Hinsehen (sync) war keiner dabei, als der Block gesetzt wurde.
+      const name = sync ? '' : ((Number.isInteger(w) ? wer[w] : null) ?? '');
+      this.setzen(i, s, s === 1 ? this.nrFuer(name) : 0);
       geaendert.push([i, s]);
       if (sync) continue;
-      const name = (Number.isInteger(w) ? wer[w] : null) ?? '';
       let z = proWer.get(name);
       if (!z) proWer.set(name, (z = { plus: 0, minus: 0, falsch: 0, neu: [] }));
       if (s === 1) {
@@ -334,6 +364,7 @@ export class LiveRaum extends DurableObject<Env> {
       const x = w.deserializeAttachment() as Anhang;
       if (x.rolle === 'web' ? x.abo : x.aktiv) this.senden(w, text);
     }
+    this.bauerSenden();
     if (proWer.size) {
       await this.planLaden();
       for (const [name, z] of proWer) this.feedZaehlen(name, z);
@@ -437,6 +468,9 @@ export class LiveRaum extends DurableObject<Env> {
       this.falsch.clear();
       this.gemeldet = false;
       this.feed = [];
+      this.wer = new Uint8Array(plan.gesamt);
+      this.bauerSetzen([]);
+      this.bauerZaehlen();
       werte.stand = this.standZumSpeichern();
       werte.feed = [];
     }
@@ -458,12 +492,15 @@ export class LiveRaum extends DurableObject<Env> {
       if (!BLOCK.test(block)) continue;
       for (const i of liste.slice(0, FALSCH_MAX)) if (Number.isInteger(i) && i >= 0 && i < plan.gesamt) this.falsch.set(i, block);
     }
+    // Was weiter steht, behält seinen Bauer. Neu Gefundenes hat keiner beim Bauen gesehen.
+    for (let i = 0; i < plan.gesamt; i++) if (this.zustand(i) !== 1) this.wer[i] = 0;
+    this.bauerZaehlen();
     this.gemeldet = true;
     await this.ctx.storage.put('stand', this.standZumSpeichern());
     for (const w of this.ctx.getWebSockets()) {
       const x = w.deserializeAttachment() as Anhang;
       if (x.rolle === 'mod') this.senden(w, this.startFuerMod(x));
-      else if (x.abo) this.senden(w, { t: 'stand', fortschritt: this.fortschritt() });
+      else if (x.abo) this.senden(w, { t: 'stand', fortschritt: this.fortschritt(), bauer: this.bauerListe() });
     }
   }
 
@@ -477,6 +514,7 @@ export class LiveRaum extends DurableObject<Env> {
       anker: this.einstellung.anker,
       server: this.einstellung.server,
       fortschritt: this.fortschritt(),
+      bauer: this.bauerListe(),
       ...this.onlineListe(),
       pos: [...this.pos.values()].map((p) => p.werte),
       feed: this.feed,
@@ -490,6 +528,62 @@ export class LiveRaum extends DurableObject<Env> {
     let anzahl = 0;
     for (const b of this.gebaut) for (let v = b; v; v &= v - 1) anzahl++;
     return { gebaut: base64(this.gebaut), gebaut_anzahl: anzahl, falsch };
+  }
+
+  // ---------- Wer wie viel gebaut hat ----------
+
+  private bauerSetzen(namen: string[]) {
+    this.bauer = namen.filter((n) => typeof n === 'string' && NAME.test(n)).slice(0, BAUER_MAX);
+    this.bauerNr = new Map(this.bauer.map((n, k) => [n.toLowerCase(), k + 1]));
+  }
+
+  private bauerZaehlen() {
+    this.proBauer = new Array(this.bauer.length + 1).fill(0);
+    for (let i = 0; i < plan.gesamt; i++) {
+      if (this.zustand(i) !== 1) continue;
+      if (this.wer[i] > this.bauer.length) this.wer[i] = 0;
+      this.proBauer[this.wer[i]]++;
+    }
+  }
+
+  private nrFuer(name: string): number {
+    if (!name) return 0;
+    const key = name.toLowerCase();
+    const da = this.bauerNr.get(key);
+    if (da) return da;
+    if (this.bauer.length >= BAUER_MAX) return 0;
+    this.bauer.push(name);
+    this.proBauer.push(0);
+    this.bauerNr.set(key, this.bauer.length);
+    for (const liste of this.tab.values()) for (const e of liste) if (e.name.toLowerCase() === key) this.skinMerken(e);
+    return this.bauer.length;
+  }
+
+  private skinMerken(e: TabEintrag) {
+    const key = e.name.toLowerCase();
+    if (!e.haut || !this.bauerNr.has(key) || JSON.stringify(this.skins[key]) === JSON.stringify(e.haut)) return;
+    this.skins[key] = e.haut;
+    this.merken('skins');
+  }
+
+  // ohne: stehende Blöcke, bei denen keiner gesehen hat, wer sie gesetzt hat
+  private bauerListe() {
+    const liste = this.bauer
+      .map((name, k) => {
+        const key = name.toLowerCase();
+        return { name, mitarbeiter: this.namen[key] ?? null, haut: this.skins[key] ?? null, anzahl: this.proBauer[k + 1] };
+      })
+      .filter((b) => b.anzahl > 0)
+      .sort((p, q) => q.anzahl - p.anzahl || p.name.localeCompare(q.name));
+    return { liste, ohne: this.proBauer[0] };
+  }
+
+  private bauerSenden() {
+    const b = this.bauerListe();
+    const text = JSON.stringify(b);
+    if (text === this.bauerText) return;
+    this.bauerText = text;
+    this.anBrowser({ t: 'bauer', ...b });
   }
 
   // ---------- Wer online ist ----------
@@ -534,10 +628,10 @@ export class LiveRaum extends DurableObject<Env> {
   // ---------- Speichern ----------
 
   private standZumSpeichern(): Gespeichert {
-    return { hash: plan.hash, gebaut: this.gebaut, falsch: [...this.falsch], gemeldet: this.gemeldet };
+    return { hash: plan.hash, gebaut: this.gebaut, falsch: [...this.falsch], gemeldet: this.gemeldet, wer: this.wer, bauer: this.bauer };
   }
 
-  private merken(was: 'stand' | 'feed' | 'namen') {
+  private merken(was: 'stand' | 'feed' | 'namen' | 'skins') {
     this.schmutzig.add(was);
     if (this.alarmGesetzt) return;
     this.alarmGesetzt = true;
@@ -552,6 +646,7 @@ export class LiveRaum extends DurableObject<Env> {
     if (was.includes('stand')) werte.stand = this.standZumSpeichern();
     if (was.includes('feed')) werte.feed = this.feed;
     if (was.includes('namen')) werte.namen = this.namen;
+    if (was.includes('skins')) werte.skins = this.skins;
     if (Object.keys(werte).length) await this.ctx.storage.put(werte);
   }
 }

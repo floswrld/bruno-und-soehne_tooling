@@ -646,6 +646,16 @@ dialog[open] { animation: rise .22s var(--ease); }
 .live-kopf { width: 20px; height: 20px; }
 .bp-spielerliste button[aria-pressed="true"] { background: rgba(var(--tint), .08); box-shadow: inset 3px 0 0 var(--brass); }
 .bp-mod-chip { margin-left: auto; font-size: 11px; padding: 1px 7px; }
+.bp-bauer { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.bp-bauer li { position: relative; display: flex; align-items: center; gap: 10px; padding: 6px 0 10px; font-size: 14px; font-weight: 500; }
+.bp-bauer .bp-zone-name { min-width: 0; overflow-wrap: anywhere; }
+.bp-bauer-platz { flex: none; width: 14px; text-align: right; font-size: 12px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bp-bauer-zahl { margin-left: auto; padding-left: 8px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.bp-bauer-balken { position: absolute; left: 24px; bottom: 3px; height: 3px; border-radius: 2px; background: var(--moss); }
+.bp-bauer li:first-child:not(.bp-bauer-ohne) .bp-bauer-balken { background: var(--brass); }
+.bp-bauer-ohne { color: var(--muted); }
+.bp-bauer-ohne .bp-bauer-balken { background: var(--steel-wash); }
+.bp-kopf-leer { display: inline-grid; place-items: center; font-size: 13px; font-weight: 700; color: var(--muted); }
 
 /* Kamera folgt einem Spieler (von Hand oder Auto) */
 .bp-folgen {
