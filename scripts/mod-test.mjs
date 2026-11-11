@@ -1,10 +1,11 @@
-// Echter Test der Mod gegen das lokale Intranet: Das Spiel startet (kurz ein Fenster), legt eine Welt an,
-// setzt und entfernt Blöcke. Danach prüft dieses Skript, ob alles im Intranet angekommen ist.
+// Echter Test der Mod gegen das lokale Intranet: Das Spiel startet (kurz ein Fenster), legt eine Welt an, läuft
+// herum, setzt und entfernt Blöcke. Dieses Skript hängt dabei als Browser am Live-Raum und misst, wie schnell alles
+// ankommt. Danach prüft es den Stand.
 //
 //   Terminal 1:  npm run lokal
 //   Terminal 2:  npm run mod:test      (braucht JDK 25 in JAVA_HOME)
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const A = 'http://localhost:8787';
@@ -15,7 +16,6 @@ const login = await fetch(`${A}/api/auth/login`, { method: 'POST', headers: { 'c
 if (!login.ok) throw new Error(`Anmeldung fehlgeschlagen (${login.status}). Läuft npm run lokal?`);
 const cookie = login.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
 const json = async (methode, pfad, body) => {
-  // Während das Spiel läuft, verfällt eine offene Verbindung. Darum einmal neu versuchen.
   const anfrage = () => fetch(A + pfad, { method: methode, headers: { cookie, connection: 'close', 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   const r = await anfrage().catch(anfrage);
   const d = await r.json();
@@ -32,69 +32,94 @@ const ablage = fileURLToPath(new URL('../mod/build/', import.meta.url));
 mkdirSync(ablage, { recursive: true });
 writeFileSync(`${ablage}bruno-live-test.json`, JSON.stringify(konfig));
 
+// Als Browser am Live-Raum: jede Nachricht mit Empfangszeit.
+const empfangen = [];
+const ws = new WebSocket(`ws://localhost:8787/api/live/ws`, { headers: { cookie, origin: A } });
+await new Promise((ok, fehler) => {
+  ws.onopen = ok;
+  ws.onerror = () => fehler(new Error('WebSocket zum Live-Raum ging nicht auf.'));
+});
+ws.onmessage = (e) => {
+  if (e.data !== 'pong') empfangen.push({ am: Date.now(), m: JSON.parse(e.data) });
+};
+ws.send(JSON.stringify({ t: 'abo', an: true }));
+
 const mod = fileURLToPath(new URL('../mod/', import.meta.url));
-// Während das Spiel läuft, muss der Spieler im Intranet als online zu sehen sein.
-let gesehen = null;
-const beobachter = setInterval(async () => {
-  const d = await json('GET', '/api/live?nur=spieler').catch(() => null);
-  const s = d?.spieler.find((q) => q.mit_mod);
-  if (s) gesehen = s;
-}, 4000);
 const programm = `"${mod}${process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'}" --console=plain runClientGameTest`;
 const ende = await new Promise((fertig) => spawn(programm, { cwd: mod, stdio: 'inherit', shell: true }).on('exit', fertig));
-clearInterval(beobachter);
+await new Promise((r) => setTimeout(r, 1500));
+ws.close();
 if (ende !== 0) throw new Error(`Der Spieltest ist fehlgeschlagen (${ende}).`);
 
 // ---------- Prüfen ----------
 
-const live = await json('GET', '/api/live?seit=0');
 const melde = (titel, ok, wert) => {
   console.log(`${ok ? 'OK    ' : 'FEHLER'} ${titel}${wert !== undefined ? `: ${wert}` : ''}`);
   if (!ok) process.exitCode = 1;
 };
-const summe = (k) => live.ereignisse.reduce((s, e) => s + e[k], 0);
-melde('Spieler war online zu sehen', !!gesehen, gesehen && `${gesehen.name} bei ${gesehen.x} / ${gesehen.y} / ${gesehen.z}`);
-melde('Nach dem Verlassen wieder offline', live.spieler.length === 0);
-melde('Chunks gemeldet', live.chunks.length > 0, live.chunks.length);
-melde('Blöcke als gebaut gemeldet', summe('plus') > 0, summe('plus'));
-melde('Abbau gemeldet', summe('minus') > 0, summe('minus'));
-melde('Falsche Blöcke gemeldet', summe('falsch') > 0, summe('falsch'));
+const zeitenDatei = `${ablage}bruno-live-test-zeiten.txt`;
+const zeiten = existsSync(zeitenDatei) ? Object.fromEntries(readFileSync(zeitenDatei, 'utf8').trim().split('\n').map((z) => z.split(' ')).map(([k, v]) => [k, Number(v)])) : {};
+const nach = (t, typ, bedingung = () => true) => empfangen.find((e) => e.am >= t && e.m.t === typ && bedingung(e.m));
 
-// Stichprobe: Was die Mod als gebaut meldet, muss im Plan wirklich dieser Block sein.
+// Die letzte Meldung: Die Skins kommen mit der Tab-Liste, kurz nach dem Anmelden.
+const online = empfangen.filter((e) => e.m.t === 'online').map((e) => e.m.spieler.find((s) => s.mit_mod)).filter(Boolean).at(-1);
+melde('Spieler mit Mod war online zu sehen', !!online, online?.name);
+melde('Skin des Spielers kam mit', !!online?.haut, online?.haut && (online.haut.hash ?? online.haut.res));
+if (online?.haut?.res) {
+  const r = await fetch(`${A}/api/live/haut?res=${encodeURIComponent(online.haut.res)}`, { headers: { cookie } });
+  melde('Standard-Skin ist als Bild abrufbar', r.ok && r.headers.get('content-type') === 'image/png', `${r.status}, ${(await r.arrayBuffer()).byteLength} Bytes`);
+}
+
+const lauf = empfangen.filter((e) => e.m.t === 'pos' && e.am >= zeiten.laufen && e.am <= zeiten.gelaufen + 300 && e.m.liste.length);
+const dauer = (zeiten.gelaufen - zeiten.laufen) / 1000;
+melde('Positionen beim Laufen mehrmals pro Sekunde', lauf.length / dauer >= 4, `${lauf.length} in ${dauer.toFixed(1)} s (${(lauf.length / dauer).toFixed(1)} pro Sekunde)`);
+const p = lauf.at(-1)?.m.liste[0];
+melde('Position mit Kommastellen und Blickrichtung', !!p && !Number.isInteger(p[1]) && typeof p[4] === 'number', p && JSON.stringify(p.slice(0, 8)));
+
+const bau = nach(zeiten.bauen, 'bloecke', (m) => !m.sync);
+melde('Gesetzte Blöcke kommen sofort an', !!bau && bau.am - zeiten.bauen < 1500, bau ? `${bau.am - zeiten.bauen} ms nach dem Befehl` : 'gar nicht');
+const abbau = nach(zeiten.abbauen, 'bloecke', (m) => !m.sync && m.liste.some(([, s]) => s === 0));
+melde('Abbau kommt sofort an', !!abbau && abbau.am - zeiten.abbauen < 1500, abbau ? `${abbau.am - zeiten.abbauen} ms nach dem Befehl` : 'gar nicht');
+
+const feed = new Map();
+for (const e of empfangen) if (e.m.t === 'feed') feed.set(e.m.eintrag.id, e.m.eintrag);
+const summe = (k) => [...feed.values()].reduce((s, e) => s + e[k], 0);
+melde('Feed: gebaut', summe('plus') > 0, summe('plus'));
+melde('Feed: abgebaut', summe('minus') > 0, summe('minus'));
+melde('Feed: falsch gesetzt', summe('falsch') > 0, summe('falsch'));
+
+// Stichprobe am Ende: Was gebaut ist, muss im Plan wirklich weißer Beton an der gefüllten Stelle sein.
+const stand = await json('GET', '/api/live');
+melde('Nach dem Verlassen wieder offline', stand.spieler.length === 0);
+const bits = Buffer.from(stand.fortschritt?.gebaut ?? '', 'base64');
+const falsch = new Map(Object.entries(stand.fortschritt?.falsch ?? {}).flatMap(([b, l]) => l.map((n) => [n, b])));
 const { x: X, z: Z } = plan.groesse;
-const vonX = ANKER.x - plan.gebaeude.x;
-const vonZ = ANKER.z - plan.gebaeude.z;
-const chunkListen = new Map();
+let nummer = 0;
+let richtig = 0;
+let faelschlich = 0;
+let falschRichtig = 0;
 plan.layers.forEach((schicht, y) => {
   let i = 0;
   for (const [, n, c] of schicht.matchAll(/(\d+)(\D)/g)) {
-    if (c !== '.') for (let k = 0; k < Number(n); k++) {
-      const q = i + k;
-      const wx = vonX + (q % X);
-      const wz = vonZ + Math.floor(q / X);
-      const key = `${wx >> 4},${wz >> 4}`;
-      if (!chunkListen.has(key)) chunkListen.set(key, []);
-      chunkListen.get(key).push({ wx, wy: ANKER.y + y, wz, block: plan.palette[c].block });
+    if (c !== '.') {
+      for (let k = 0; k < Number(n); k++, nummer++) {
+        const q = i + k;
+        const wx = ANKER.x - plan.gebaeude.x + (q % X);
+        const wz = ANKER.z - plan.gebaeude.z + Math.floor(q / X);
+        const wy = ANKER.y - plan.gebaeude.y + y;
+        const gebaut = (bits[nummer >> 3] & (1 << (nummer & 7))) !== 0;
+        // Stehen geblieben ist weißer Beton in x = -60, y 114..120, z -49..-30.
+        const imBereich = wx === -60 && wy >= 114 && wy <= 120 && wz >= -49 && wz <= -30;
+        const soll = plan.palette[c].block;
+        if (gebaut && imBereich && soll === 'minecraft:white_concrete') richtig++;
+        else if (gebaut) faelschlich++;
+        if (imBereich && soll !== 'minecraft:white_concrete' && falsch.get(nummer) === 'minecraft:white_concrete') falschRichtig++;
+      }
     }
     i += Number(n);
   }
 });
-let gebautRichtig = 0;
-let gebautFalschesFeld = 0;
-let laengePasst = true;
-for (const c of live.chunks) {
-  const liste = chunkListen.get(`${c.cx},${c.cz}`);
-  if (!liste || liste.length !== c.n) { laengePasst = false; continue; }
-  const bits = Buffer.from(c.gebaut, 'base64');
-  liste.forEach((b, i) => {
-    if (!(bits[i >> 3] & (1 << (i & 7)))) return;
-    // Gesetzt wurde weißer Beton in x = -60, y 114..120, z -49..-30 (der Rest wurde wieder abgebaut).
-    const imBereich = b.wx === -60 && b.wy >= 114 && b.wy <= 120 && b.wz >= -49 && b.wz <= -30;
-    if (imBereich && b.block === 'minecraft:white_concrete') gebautRichtig++;
-    else if (b.block === 'minecraft:white_concrete') gebautFalschesFeld++; // Abgebautes darf nicht mehr als gebaut gelten
-  });
-}
-melde('Blockzahl je Chunk passt zum Plan', laengePasst);
-melde('Gebaut steht an den richtigen Stellen', gebautRichtig > 0, `${gebautRichtig} Blöcke`);
-melde('Nichts steht fälschlich als gebaut da', gebautFalschesFeld === 0, gebautFalschesFeld);
+melde('Gebaut steht an den richtigen Stellen', richtig > 0, `${richtig} Blöcke`);
+melde('Nichts steht fälschlich als gebaut da', faelschlich === 0, faelschlich);
+melde('Falsch gesetzte Blöcke erkannt', falschRichtig > 0, falschRichtig);
 console.log(process.exitCode ? '\nTest fehlgeschlagen.' : '\nTest bestanden.');

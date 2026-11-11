@@ -1,9 +1,10 @@
 // Raster, Baustoffe und Formen. Alle Koordinaten sind Gebäude-Koordinaten:
-// (0,0,0) ist die untere Nord-West-Ecke, x = Osten, y = oben, z = Süden. Gelände hat negative Werte.
+// (0,0,0) ist die untere Nord-West-Ecke, x = Osten, y = oben, z = Süden.
 
 export const BAU = { x: 120, y: 40, z: 200 };
-export const RAND = { west: 46, ost: 48, nord: 62, sued: 44 };
-export const HOEHE = 66;
+// Kein Gelände mehr: Das Raster ist genau das Gebäude. Der Rand bleibt als Stellschraube.
+export const RAND = { west: 0, ost: 0, nord: 0, sued: 0 };
+export const HOEHE = 41;
 
 export const GX = RAND.west + BAU.x + RAND.ost;
 export const GZ = RAND.nord + BAU.z + RAND.sued;

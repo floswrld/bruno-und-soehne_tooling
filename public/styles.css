@@ -640,5 +640,36 @@ dialog[open] { animation: rise .22s var(--ease); }
 .bp-spieler-namen { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .bp-spieler-name { position: absolute; left: 0; top: 0; padding: 2px 7px; border-radius: 5px; background: #F2C14E; color: #1C1416; font-size: 12px; font-weight: 700; white-space: nowrap; }
 
+/* Köpfe aus dem Skin: 8 x 8 Pixel, scharf vergrößert */
+.bp-kopf, .live-kopf { flex: none; border-radius: 4px; image-rendering: pixelated; background: rgba(var(--tint), .08); }
+.bp-kopf { width: 24px; height: 24px; }
+.live-kopf { width: 20px; height: 20px; }
+.bp-spielerliste button[aria-pressed="true"] { background: rgba(var(--tint), .08); box-shadow: inset 3px 0 0 var(--brass); }
+.bp-mod-chip { margin-left: auto; font-size: 11px; padding: 1px 7px; }
+
+/* Kamera folgt einem Spieler */
+.bp-folgen {
+  position: absolute; left: 12px; bottom: 76px; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 12px; border-radius: 999px;
+  background: rgba(28, 20, 22, .84); color: #F2C14E; font-size: 13px; font-weight: 600;
+}
+.bp-folgen[hidden] { display: none; }
+.bp-folgen button { width: 28px; height: 28px; border: 0; border-radius: 50%; background: none; color: #fff; cursor: pointer; font-size: 14px; }
+.bp-folgen button:hover { background: rgba(255, 255, 255, .12); }
+
+/* Ankerblock zum Einmessen */
+.bp-anker-schild {
+  position: absolute; left: 0; top: 0; display: grid; gap: 1px; padding: 6px 10px; border-radius: 8px; pointer-events: none;
+  background: #FFB020; color: #1C1416; font-size: 12px; line-height: 1.3; white-space: nowrap; box-shadow: 0 6px 18px -6px rgba(0, 0, 0, .5);
+}
+.bp-anker-schild b { font-size: 13px; }
+.bp-anker-schild[hidden], .bp-pfeil-schild[hidden] { display: none; }
+.bp-pfeil-schild { position: absolute; left: 0; top: 0; padding: 2px 7px; border-radius: 5px; pointer-events: none; color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.bp-pfeil-x { background: #D8342C; }
+.bp-pfeil-z { background: #2E7DD7; }
+.bp-einmessen { margin: 12px 0 4px; padding: 12px 14px; border-radius: var(--r-md); background: rgba(255, 176, 32, .12); border: 1px solid rgba(255, 176, 32, .45); }
+.bp-einmessen p { margin: 0 0 8px; }
+.bp-einmessen ol { margin: 0 0 10px; padding-left: 18px; display: grid; gap: 4px; }
+.bp-einmessen kbd, .bp-einmessen code { padding: 1px 5px; border-radius: 4px; background: var(--steel-wash); font-size: 12.5px; font-family: inherit; }
+
 .mod-schritte { margin: 0; padding-left: 20px; display: grid; gap: 10px; font-size: 14px; }
 .mod-schritte code { padding: 1px 5px; border-radius: 4px; background: var(--steel-wash); font-size: 13px; }

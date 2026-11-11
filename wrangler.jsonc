@@ -21,5 +21,8 @@
   ],
   // OAuth-Clients, Freigaben und Tokens (Tokens nur als Hash)
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "fd85f6dacb0d4efb97d92e0fb485b1db" }],
+  // Live-Raum (src/liveraum.ts): hält die WebSockets von Mods und Browsern. SQLite-Speicher, geht im Gratis-Tarif.
+  "durable_objects": { "bindings": [{ "name": "LIVE", "class_name": "LiveRaum" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveRaum"] }],
   "observability": { "enabled": true }
 }

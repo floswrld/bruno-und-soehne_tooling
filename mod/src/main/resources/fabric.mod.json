@@ -3,13 +3,14 @@
   "id": "bruno-live",
   "version": "${version}",
   "name": "Bruno Live",
-  "description": "Meldet ans Bruno & Söhne Intranet, wer online ist und welche Blöcke des Bauplans stehen. Meldet nur auf dem eingestellten Server.",
+  "description": "Zeigt im Bruno & Söhne Intranet live, wer auf dem Server ist, wo er steht (mit Skin) und welche Blöcke des Bauplans stehen. Meldet nur auf dem eingestellten Server.",
   "authors": ["Bruno & Söhne GmbH"],
   "license": "All-Rights-Reserved",
   "environment": "client",
   "entrypoints": {
     "client": ["de.brunosoehne.live.BrunoLive"]
   },
+  "mixins": ["bruno-live.mixins.json"],
   "depends": {
     "fabricloader": ">=0.20.0",
     "minecraft": "~26.3",

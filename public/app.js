@@ -1,4 +1,5 @@
 // Bruno & Söhne Intranet – Single-Page-App ohne Build-Schritt.
+import { koepfeFuellen } from '/haut.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -249,14 +250,17 @@ async function route() {
 window.addEventListener('hashchange', route);
 
 // ---------- Live vom Minecraft-Server ----------
-// Eine einzige Abfrageschleife für die ganze App: alle 20 Sekunden, auf der Bauplan-Seite alle 5.
-// In einem versteckten Tab wird nicht abgefragt, das schont das Gratis-Kontingent.
+// Eine WebSocket-Verbindung für die ganze App, nichts wird abgefragt. Sie bringt sofort, wer online ist.
+// Die Bauplan-Seite meldet sich zusätzlich an und bekommt dann auch Positionen, Skins und jeden gesetzten Block.
+
+const live = { ws: null, versuche: 0, timer: null, ping: null, abo: null };
 
 function liveListeFuellen(el, d) {
   const zahl = d?.spieler.length ?? 0;
   el.innerHTML = zahl
-    ? `<ul class="live-liste">${d.spieler.map((s) => `<li><span class="pulse-punkt"></span><b>${esc(s.name)}</b>${s.mitarbeiter ? `<span class="muted small">${esc(s.mitarbeiter)}</span>` : ''}</li>`).join('')}</ul>`
-    : `<p class="small muted" style="margin:0">${d?.beobachtet ? 'Niemand online.' : 'Gerade meldet niemand etwas. Sichtbar wird es, sobald jemand mit der Mod Bruno Live auf dem Server ist.'}</p>`;
+    ? `<ul class="live-liste">${d.spieler.map((s) => `<li><img class="live-kopf" data-kopf="${esc(s.name)}" alt="" width="20" height="20"><b>${esc(s.name)}</b>${s.mitarbeiter ? `<span class="muted small">${esc(s.mitarbeiter)}</span>` : ''}</li>`).join('')}</ul>`
+    : `<p class="small muted" style="margin:0">${d?.beobachtet ? 'Niemand online.' : 'Gerade ist niemand mit der Mod Bruno Live auf dem Server.'}</p>`;
+  if (zahl) koepfeFuellen(el, d.spieler);
 }
 
 function liveZeigen(d) {
@@ -268,34 +272,62 @@ function liveZeigen(d) {
   if (d) $$('[data-live-liste]').forEach((el) => liveListeFuellen(el, d));
 }
 
-async function liveAbrufen() {
-  if (document.hidden || !state.me) return;
-  const ansicht = state.liveAnsicht;
-  try {
-    const d = await api('GET', ansicht ? `/live?seit=${ansicht.seit}` : '/live?nur=spieler');
-    state.live = d;
-    liveZeigen(d);
-    if (ansicht && state.liveAnsicht === ansicht) {
-      ansicht.seit = d.jetzt - 15000;
-      ansicht.empfangen(d);
-    }
-  } catch {
-    // Beim nächsten Mal wieder. Live-Daten sind es nicht wert, jemanden zu stören.
-  }
+function liveSenden(nachricht) {
+  if (live.ws?.readyState === WebSocket.OPEN) live.ws.send(typeof nachricht === 'string' ? nachricht : JSON.stringify(nachricht));
 }
 
-function liveSchleife() {
-  if (state.liveLaeuft) return;
-  state.liveLaeuft = true;
-  const takt = async () => {
-    await liveAbrufen();
-    setTimeout(takt, state.liveAnsicht ? 5000 : 20000);
-  };
-  takt();
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) liveAbrufen();
+function liveVerbinden() {
+  if (live.ws || !state.me) return;
+  clearTimeout(live.timer);
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live/ws`);
+  live.ws = ws;
+  ws.addEventListener('open', () => {
+    live.versuche = 0;
+    if (live.abo && !document.hidden) liveSenden({ t: 'abo', an: true });
+    live.ping = setInterval(() => liveSenden('ping'), 25_000);
+  });
+  ws.addEventListener('message', (e) => {
+    if (e.data === 'pong') return;
+    let m;
+    try {
+      m = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (m.t === 'online' || m.t === 'start') {
+      state.live = { spieler: m.spieler, beobachtet: m.beobachtet };
+      liveZeigen(state.live);
+    }
+    // Standort oder Server geändert: Die Bauplan-Seite baut sich mit dem neuen Stand neu auf.
+    if (m.t === 'einstellung' && live.abo) return route();
+    live.abo?.empfangen(m);
+  });
+  ws.addEventListener('close', () => {
+    clearInterval(live.ping);
+    if (live.ws !== ws) return;
+    live.ws = null;
+    live.abo?.getrennt();
+    if (!state.me) return;
+    // Neu verbinden: erst schnell, dann immer gemächlicher.
+    live.timer = setTimeout(liveVerbinden, Math.min(30_000, 1000 * 2 ** live.versuche++));
   });
 }
+
+function liveTrennen() {
+  clearTimeout(live.timer);
+  const ws = live.ws;
+  live.ws = null;
+  ws?.close();
+}
+
+// Bauplan-Seite an- und abmelden. Im versteckten Tab ruht das Abo, beim Zurückkommen gibt es den frischen Stand.
+function liveAbo(empfaenger) {
+  live.abo = empfaenger;
+  liveSenden({ t: 'abo', an: !!empfaenger && !document.hidden });
+}
+document.addEventListener('visibilitychange', () => {
+  if (live.abo) liveSenden({ t: 'abo', an: !document.hidden });
+});
 
 const themaIcon = () => (window.brunoThema.aktiv() === 'dunkel' ? I.sonne : I.mond);
 document.addEventListener('thema', () => {
@@ -335,13 +367,14 @@ function renderShell(active) {
       <nav class="tabbar" style="--tabs:${items.length}" aria-label="Hauptmenü">${items.map(tab).join('')}</nav>
     </div>`;
   liveZeigen(state.live);
-  liveSchleife();
+  liveVerbinden();
   $$('[data-thema-knopf]').forEach((b) =>
     b.addEventListener('click', () => window.brunoThema.setzen(window.brunoThema.aktiv() === 'dunkel' ? 'hell' : 'dunkel'))
   );
   $$('[data-logout]').forEach((b) =>
     b.addEventListener('click', async () => {
       await post('/auth/logout').catch(() => {});
+      liveTrennen();
       state.me = null;
       location.hash = '';
       route();
@@ -1169,7 +1202,7 @@ function sprintDialog(sprint) {
 
 async function viewPlan(main) {
   // Der Plan ist eine eigene Datei: gezippt vom CDN, das Budget des Workers bleibt unberührt.
-  const [daten, plan, modul] = await Promise.all([
+  const [start, plan, modul] = await Promise.all([
     api('GET', '/bauplan'),
     fetch('/rechenzentrum.plan.json').then((r) => {
       if (!r.ok) throw new Error('Der Bauplan konnte nicht geladen werden.');
@@ -1180,16 +1213,13 @@ async function viewPlan(main) {
   main.classList.add('breit');
   const istAdmin = state.me.role === 'admin';
   main.innerHTML = `
-    <header class="page-head"><div><h1>Bauplan</h1><p>Das Rechenzentrum, Block für Block: 120 × 200 × 40, mit Kühlung auf dem Dach. Innen ist frei, den Ausbau machen wir selbst.</p></div></header>
+    <header class="page-head"><div><h1>Bauplan</h1><p>Das Rechenzentrum, Block für Block: ${plan.gebaeude.breite} × ${plan.gebaeude.tiefe} × ${plan.gebaeude.hoehe}, nur die äußerste Schicht. Innen ist frei, den Ausbau machen wir selbst. Alles hier läuft live mit.</p></div></header>
     <div data-bauplan></div>`;
   const ansicht = modul.zeigeBauplan(
     $('[data-bauplan]', main),
     {
       plan,
-      fortschritt: daten.fortschritt,
-      anker: daten.anker,
-      server: daten.server,
-      live: daten.live,
+      start,
       istAdmin,
       toast,
       speichern: async (werte) => {
@@ -1200,13 +1230,12 @@ async function viewPlan(main) {
     },
     esc
   );
-  // Zehn Sekunden Überlappung, falls eine Meldung genau zwischen zwei Abrufen landet.
-  state.liveAnsicht = { seit: daten.live.jetzt - 15000, empfangen: ansicht.liveEmpfangen };
+  liveAbo({ empfangen: ansicht.liveEmpfangen, getrennt: ansicht.liveGetrennt });
+  liveVerbinden();
   state.cleanup = () => {
-    state.liveAnsicht = null;
+    liveAbo(null);
     ansicht.ende();
   };
-  liveAbrufen();
 }
 
 // ---------- Personal (Admin) ----------
@@ -1473,12 +1502,12 @@ async function modPanelZeigen(el) {
   const { key } = await api('GET', '/me/mc-key');
   el.innerHTML = `
     <div class="panel-head"><h2>Minecraft-Mod</h2>${key ? `<span class="chip ok">Schlüssel …${esc(key.hint)}</span>` : '<span class="chip off">noch nicht eingerichtet</span>'}</div>
-    <p class="small muted" style="margin:0 0 12px">Bruno Live zeigt hier im Intranet, wer auf dem Server ist und welche Blöcke des Bauplans stehen. Sie meldet nur auf unserem Server: deinen Namen, deine Position, die Spielerliste und welche Plan-Blöcke in deiner Sichtweite stehen. Sonst nichts.</p>
+    <p class="small muted" style="margin:0 0 12px">Bruno Live zeigt hier im Intranet live, wer auf dem Server ist, wo er gerade steht (mit Skin) und welche Blöcke des Bauplans stehen. Sie meldet nur auf unserem Server: deinen Namen, deine Position, die Spielerliste mit Skins, wo Mitspieler in deiner Sichtweite stehen und welche Plan-Blöcke du siehst. Sonst nichts.</p>
     <ol class="mod-schritte">
       <li>In der CurseForge-App beim Profil (Minecraft 26.3, Fabric) über das <b>⋯</b>-Menü <b>Open Folder</b> wählen.</li>
-      <li><a class="btn btn-ghost btn-sm" href="/downloads/bruno-live.jar" download>Mod herunterladen</a> und nach <code>mods</code> legen. Fabric API muss im Profil sein.</li>
+      <li><a class="btn btn-ghost btn-sm" href="/downloads/bruno-live.jar" download>Mod herunterladen</a> (Version 2) und in den Ordner <code>mods</code> legen, nicht ins CurseForge-Fenster ziehen. Eine ältere bruno-live.jar dort löschen. Fabric API muss im Profil sein.</li>
       <li><button type="button" class="btn btn-brass btn-sm" data-mod-key>${key ? 'Neue Datei erzeugen' : 'Zugangsdatei erzeugen'}</button> und nach <code>config</code> legen. ${key ? 'Der alte Schlüssel gilt dann nicht mehr.' : ''}</li>
-      <li>Minecraft starten und auf den Server gehen. Im Chat steht „Bruno Live: verbunden“. <code>/bruno</code> zeigt jederzeit den Stand.</li>
+      <li>Minecraft starten und auf den Server gehen. Im Chat steht „Bruno Live: verbunden“. <code>/bruno</code> zeigt jederzeit den Stand.${state.me.role === 'admin' ? ' Den Standort legst du im Spiel fest: auf den Eckblock schauen und <code>/bruno ecke</code> tippen.' : ''}</li>
     </ol>
     ${key ? `<p class="small muted" style="margin:12px 0 0">Zuletzt benutzt: ${key.last_used_at ? esc(new Date(key.last_used_at + 'Z').toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })) : 'noch nie'}. <button type="button" class="link" data-mod-weg>Schlüssel widerrufen</button></p>` : ''}`;
   $('[data-mod-key]', el).addEventListener('click', async () => {

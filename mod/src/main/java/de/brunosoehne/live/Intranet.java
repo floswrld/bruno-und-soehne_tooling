@@ -8,12 +8,18 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.WebSocket;
+import java.net.http.WebSocketHandshakeException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Zugang zum Intranet: Adresse und Schlüssel aus config/bruno-live.json, dazu die drei Anfragen der Mod. */
+/** Zugang zum Intranet: Adresse und Schlüssel aus config/bruno-live.json, der Plan und die Live-Leitung. */
 final class Intranet {
 	/** Inhalt von config/bruno-live.json. Die Datei kommt fertig aus dem Profil im Intranet. */
 	record Konfig(String url, String schluessel, boolean einzelspieler) {
@@ -28,7 +34,7 @@ final class Intranet {
 		}
 	}
 
-	/** Antwort mit einem Status, der nicht 2xx ist. 401 = Schlüssel ungültig, 409 = Plan oder Standort geändert. */
+	/** Antwort mit einem Status, der nicht 2xx ist. 401 = Schlüssel ungültig. */
 	static final class Abgelehnt extends IOException {
 		final int status;
 
@@ -40,39 +46,125 @@ final class Intranet {
 
 	private static final Gson GSON = new Gson();
 	private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-	private final Konfig konfig;
+	final Konfig konfig;
 
 	Intranet(Konfig konfig) {
 		this.konfig = konfig;
 	}
 
-	private HttpRequest.Builder anfrage(String pfad) {
-		return HttpRequest.newBuilder(URI.create(konfig.url() + pfad))
-			.timeout(Duration.ofSeconds(30))
-			.header("Authorization", "Bearer " + konfig.schluessel());
-	}
-
-	private String senden(HttpRequest anfrage) throws IOException, InterruptedException {
-		HttpResponse<String> antwort = client.send(anfrage, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-		if (antwort.statusCode() / 100 != 2) {
-			String text = antwort.body();
-			throw new Abgelehnt(antwort.statusCode(), text.length() > 200 ? text.substring(0, 200) : text);
-		}
-		return antwort.body();
-	}
-
-	JsonObject einstellungen() throws IOException, InterruptedException {
-		return JsonParser.parseString(senden(anfrage("/api/mc/config").GET().build())).getAsJsonObject();
-	}
-
 	JsonObject plan() throws IOException, InterruptedException {
-		return JsonParser.parseString(senden(anfrage("/api/mc/plan").GET().build())).getAsJsonObject();
+		HttpRequest anfrage = HttpRequest.newBuilder(URI.create(konfig.url() + "/api/mc/plan"))
+			.timeout(Duration.ofSeconds(30))
+			.header("Authorization", "Bearer " + konfig.schluessel())
+			.GET()
+			.build();
+		HttpResponse<String> antwort = client.send(anfrage, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+		if (antwort.statusCode() / 100 != 2) throw new Abgelehnt(antwort.statusCode(), kurz(antwort.body()));
+		return JsonParser.parseString(antwort.body()).getAsJsonObject();
 	}
 
-	void melden(JsonObject meldung) throws IOException, InterruptedException {
-		senden(anfrage("/api/mc/melden")
-			.header("Content-Type", "application/json")
-			.POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(meldung), StandardCharsets.UTF_8))
-			.build());
+	/** Baut die Live-Leitung auf. Eingehende Nachrichten landen in der Warteschlange, die das Spiel jeden Tick leert. */
+	CompletableFuture<Leitung> verbinden(Queue<JsonObject> eingang) {
+		String ziel = konfig.url().replaceFirst("^http", "ws") + "/api/mc/live";
+		Leitung leitung = new Leitung(eingang);
+		return client.newWebSocketBuilder()
+			.header("Authorization", "Bearer " + konfig.schluessel())
+			.connectTimeout(Duration.ofSeconds(10))
+			.buildAsync(URI.create(ziel), leitung)
+			.handle((ws, fehler) -> {
+				if (fehler == null) return leitung;
+				Throwable f = fehler.getCause() != null ? fehler.getCause() : fehler;
+				if (f instanceof WebSocketHandshakeException h) {
+					int status = h.getResponse().statusCode();
+					Object body = h.getResponse().body();
+					throw new java.util.concurrent.CompletionException(new Abgelehnt(status, body instanceof String s ? kurz(s) : ""));
+				}
+				throw new java.util.concurrent.CompletionException(f);
+			});
+	}
+
+	private static String kurz(String text) {
+		return text == null ? "" : text.length() > 200 ? text.substring(0, 200) : text;
+	}
+
+	/** Eine offene WebSocket-Verbindung zum Live-Raum. Senden geht der Reihe nach, das Spiel wartet nie darauf. */
+	static final class Leitung implements WebSocket.Listener {
+		private static final int MAX_UNTERWEGS = 64;
+		private final Queue<JsonObject> eingang;
+		private final StringBuilder teil = new StringBuilder();
+		private final AtomicInteger unterwegs = new AtomicInteger();
+		private volatile WebSocket ws;
+		private volatile boolean offen;
+		private volatile String grund = "";
+		private CompletableFuture<WebSocket> kette = CompletableFuture.completedFuture(null);
+
+		Leitung(Queue<JsonObject> eingang) {
+			this.eingang = eingang;
+		}
+
+		boolean offen() {
+			return offen;
+		}
+
+		String grund() {
+			return grund;
+		}
+
+		@Override
+		public void onOpen(WebSocket ws) {
+			this.ws = ws;
+			offen = true;
+			ws.request(1);
+		}
+
+		@Override
+		public CompletionStage<?> onText(WebSocket ws, CharSequence daten, boolean letztes) {
+			teil.append(daten);
+			if (letztes) {
+				try {
+					eingang.add(JsonParser.parseString(teil.toString()).getAsJsonObject());
+				} catch (RuntimeException ex) {
+					BrunoLive.LOG.debug("Unlesbare Nachricht", ex);
+				}
+				teil.setLength(0);
+			}
+			ws.request(1);
+			return null;
+		}
+
+		@Override
+		public CompletionStage<?> onClose(WebSocket ws, int code, String text) {
+			offen = false;
+			grund = "Verbindung beendet (" + code + (text == null || text.isEmpty() ? "" : ": " + text) + ")";
+			return null;
+		}
+
+		@Override
+		public void onError(WebSocket ws, Throwable fehler) {
+			offen = false;
+			grund = "Verbindung unterbrochen: " + fehler;
+		}
+
+		/** Wichtiges (Blöcke) wird immer gesendet. Positionen fallen weg, wenn die Leitung gerade hinterherhinkt. */
+		synchronized void senden(JsonObject nachricht, boolean wichtig) {
+			if (!offen) return;
+			if (!wichtig && unterwegs.get() > MAX_UNTERWEGS) return;
+			String text = GSON.toJson(nachricht);
+			unterwegs.incrementAndGet();
+			kette = kette.thenCompose((x) -> ws.sendText(text, true)).handle((x, fehler) -> {
+				unterwegs.decrementAndGet();
+				if (fehler != null) {
+					offen = false;
+					grund = "Senden fehlgeschlagen: " + fehler;
+				}
+				return ws;
+			});
+		}
+
+		void schliessen() {
+			offen = false;
+			WebSocket w = ws;
+			if (w != null) w.sendClose(WebSocket.NORMAL_CLOSURE, "").exceptionally((x) -> null);
+		}
 	}
 }

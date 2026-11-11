@@ -1,8 +1,10 @@
-// Bauplan des Rechenzentrums: 3D-Ansicht, Ebenen, Baufortschritt, Materialliste.
+// Bauplan des Rechenzentrums: 3D-Ansicht, Ebenen, Baufortschritt, Materialliste, live mitlaufende Spieler.
 // Wird erst geladen, wenn jemand die Seite öffnet.
 import * as THREE from '/vendor/three/three.module.min.js';
 import { OrbitControls } from '/vendor/three/OrbitControls.js';
 import { BLOECKE } from '/bloecke.js';
+import { Bewegung, figurBauen } from '/figur.js';
+import { ersatzHaut, hautLaden, hautVergessen, kopfBild } from '/haut.js';
 
 const FARBE_FALSCH = 0xd8342c;
 const STATUS = { fehlt: 1, gebaut: 2, falsch: 3 };
@@ -413,11 +415,13 @@ const THEMEN = {
   dunkel: { himmel: 0x0c1219, nebel: 0x0c1219, boden: 0x22301f, hemi: [0xa9bcdc, 0x2a3440, 1.0], sonne: [0xb4c6e6, 0.95], gegen: 0.2, leuchten: 1.6 },
 };
 
-export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, server, live, istAdmin, speichern, toast }, esc) {
-  const d = planEntpacken(plan, fortschritt);
-  const anker = ankerDaten ?? plan.anker;
+export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }, esc) {
+  const d = planEntpacken(plan, start.fortschritt);
+  const anker = start.anker ?? plan.anker;
+  const server = start.server;
+  const ecke = plan.ankerblock ?? { x: 0, y: 0, z: 0, block: 'minecraft:black_concrete', teil: 'Eckverglasung' };
   // Daten gibt es, sobald ein Abgleich gelaufen ist oder die Mod etwas gemeldet hat.
-  let hatDaten = !!fortschritt || live.chunks.length > 0;
+  let hatDaten = !!start.fortschritt;
   const { X, Y, Z } = d;
   const g = plan.gebaeude;
   const abschnitte = Object.fromEntries(Object.keys(plan.abschnitte).map((a) => [a, true]));
@@ -428,6 +432,8 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
         <canvas></canvas>
         <div class="bp-kompass" aria-hidden="true"></div>
         <div class="bp-spieler-namen" aria-hidden="true"></div>
+        <div class="bp-anker-schild" aria-hidden="true" hidden><b>Hier einmessen</b><span>${esc(blockName(ecke.block))}, unterste Nordwest-Ecke</span></div>
+        <div class="bp-folgen" hidden><span data-folgen-name></span><button type="button" data-folgen-aus aria-label="Nicht mehr folgen">✕</button></div>
         <div class="bp-laden" role="status"></div>
         <div class="bp-oben">
           <div class="bp-seg" role="group" aria-label="Blickrichtung">
@@ -515,11 +521,9 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
       </div>`;
     };
     const falsch = d.ist.size;
-    const stand = fortschritt
-      ? `Letzter Datei-Abgleich: ${new Date(fortschritt.gescannt_am).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}. Neuere Meldungen der Mod gehen vor.`
-      : hatDaten
-        ? 'Stand aus den Live-Meldungen der Mod: Was noch keiner mit der Mod gesehen hat, zählt als offen.'
-        : 'Noch kein Abgleich mit der Minecraft-Welt. Alles zählt als offen.';
+    const stand = hatDaten
+      ? 'Stand live aus der Mod: Jeder gesetzte Block kommt sofort an. Was noch keiner mit der Mod gesehen hat, zählt als offen.'
+      : 'Noch kein Abgleich mit der Minecraft-Welt. Alles zählt als offen.';
     $('[data-fortschritt]').innerHTML = `
       ${Object.keys(plan.abschnitte).map((a) => meter(esc(plan.abschnitte[a].name), summeFuer(a))).join('')}
       ${falsch ? `<p class="bp-falsch">${zahl.format(falsch)} Blöcke sind falsch gesetzt und rot markiert.</p>` : ''}
@@ -767,17 +771,27 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
 
   // ---------- Zeichnen ----------
 
+  // Gezeichnet wird nur bei Bedarf. Solange sich eine Figur bewegt, Bild für Bild.
   let geplant = false;
   let tot = false;
+  let letztesBild = 0;
   function zeichnen() {
     if (geplant || tot) return;
     geplant = true;
-    requestAnimationFrame(() => {
+    requestAnimationFrame((t) => {
       geplant = false;
       if (tot) return;
+      const dt = letztesBild ? Math.min(0.1, (t - letztesBild) / 1000) : 0;
+      letztesBild = t;
+      const weiter = figurenBewegen(dt);
       renderer.render(szene, kamera);
-      kompassZeigen(canvas.clientWidth, canvas.clientHeight);
-      spielerNamenZeigen(canvas.clientWidth, canvas.clientHeight);
+      const b = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      kompassZeigen(b, h);
+      spielerNamenZeigen(b, h);
+      eckeSchildZeigen(b, h);
+      if (weiter && !document.hidden) zeichnen();
+      else letztesBild = 0;
     });
   }
   steuerung.addEventListener('change', zeichnen);
@@ -914,7 +928,12 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
       geometrieBauen();
     })
   );
-  $$('[data-blick]').forEach((b) => b.addEventListener('click', () => blick(b.dataset.blick)));
+  $$('[data-blick]').forEach((b) =>
+    b.addEventListener('click', () => {
+      folgenBeenden();
+      blick(b.dataset.blick);
+    })
+  );
   $('input[type=range]').addEventListener('input', (e) => {
     sicht.ebene = Number(e.target.value);
     ebenenZeigen();
@@ -933,27 +952,13 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
     })
   );
 
-  // ---------- Live ----------
-  // Die Mod meldet je Welt-Chunk ein Bitfeld. Reihenfolge wie die Plannummern, Website und Mod rechnen sie gleich aus.
 
-  const chunkListen = new Map();
-  if (anker) {
-    const vonX = anker.x - g.x;
-    const vonZ = anker.z - g.z;
-    for (let k = 0; k < d.anzahl; k++) {
-      const zelle = d.nummern[k];
-      const q = zelle % (X * Z);
-      const key = `${(vonX + (q % X)) >> 4},${(vonZ + Math.floor(q / X)) >> 4}`;
-      let liste = chunkListen.get(key);
-      if (!liste) chunkListen.set(key, (liste = []));
-      liste.push(zelle);
-    }
-  }
-  const chunkStand = new Map();
+  // ---------- Live: Blöcke ----------
+  // Der Live-Raum schickt Blöcke als Plannummern. Website und Mod zählen sie gleich.
 
   // Frisch gesetzte Blöcke leuchten kurz auf, auch in der Gesamtansicht.
   const BLINK_MAX = 3000;
-  const BLINK_MS = 12000;
+  const BLINK_MS = 6000;
   const blinkFarbe = { gebaut: new THREE.Color(0x3fd17a), weg: new THREE.Color(0xf2a33c), falsch: new THREE.Color(0xe5392f) };
   const blinkMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.8, depthWrite: false }), BLINK_MAX);
   blinkMesh.frustumCulled = false;
@@ -978,97 +983,167 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
   }
   const blinkTakt = setInterval(() => {
     if (blinker.length) blinkZeigen();
-  }, 1000);
+  }, 500);
 
-  function chunksAnwenden(chunks, erstmals) {
-    const schmutzig = new Set();
-    const jetzt = performance.now();
-    const seitAbgleich = fortschritt ? Date.parse(fortschritt.gescannt_am) : 0;
-    let geaendert = false;
-    for (const c of chunks) {
-      const key = `${c.cx},${c.cz}`;
-      const liste = chunkListen.get(key);
-      if (!liste || liste.length !== c.n || c.am < seitAbgleich || (chunkStand.get(key) ?? 0) >= c.am) continue;
-      chunkStand.set(key, c.am);
-      geaendert = true;
-      const bits = Uint8Array.from(atob(c.gebaut), (ch) => ch.charCodeAt(0));
-      const falsch = new Map();
-      for (const [block, stellen] of Object.entries(c.falsch ?? {})) for (const i of stellen) falsch.set(i, block);
-      for (let i = 0; i < liste.length; i++) {
-        const zelle = liste[i];
-        const neu = falsch.has(i) ? STATUS.falsch : bits[i >> 3] & (1 << (i & 7)) ? STATUS.gebaut : STATUS.fehlt;
-        if (neu === STATUS.falsch) d.ist.set(zelle, falsch.get(i));
-        else d.ist.delete(zelle);
-        const alt = d.status[zelle];
-        if (neu === alt) continue;
-        const y = Math.floor(zelle / (X * Z));
-        const z = zaehler[y][d.zellen[zelle] - 1];
-        if (alt === STATUS.gebaut) z.gebaut--;
-        if (neu === STATUS.gebaut) z.gebaut++;
-        d.status[zelle] = neu;
-        schmutzig.add(y);
-        if (!erstmals) {
-          const farbe = neu === STATUS.gebaut ? blinkFarbe.gebaut : neu === STATUS.falsch ? blinkFarbe.falsch : blinkFarbe.weg;
-          blinker.push({ zelle, farbe, bis: jetzt + BLINK_MS });
+  // Viele Meldungen, ein Neubau: Ebenen werden je Bild höchstens einmal neu gebaut, die Tafeln viermal pro Sekunde.
+  const schmutzigeEbenen = new Set();
+  let nachbauGeplant = false;
+  let tafelnGeplant = false;
+  function nachbauen() {
+    if (!nachbauGeplant) {
+      nachbauGeplant = true;
+      requestAnimationFrame(() => {
+        nachbauGeplant = false;
+        if (tot) return;
+        if (sicht.modus !== 'alles') {
+          for (const y of schmutzigeEbenen) {
+            for (let i = y * X * Z; i < (y + 1) * X * Z; i++) zelleEinstufen(i);
+            stufeFuellen(y, ebeneBauen(y, d));
+          }
+          renderer.shadowMap.needsUpdate = true;
         }
-      }
+        schmutzigeEbenen.clear();
+        zeichnen();
+      });
     }
-    if (!geaendert) return;
-    hatDaten = true;
-    if (erstmals) return;
-    if (sicht.modus !== 'alles') {
-      for (const y of schmutzig) {
-        for (let i = y * X * Z; i < (y + 1) * X * Z; i++) zelleEinstufen(i);
-        stufeFuellen(y, ebeneBauen(y, d));
-      }
-      renderer.shadowMap.needsUpdate = true;
+    if (!tafelnGeplant) {
+      tafelnGeplant = true;
+      setTimeout(() => {
+        tafelnGeplant = false;
+        if (tot) return;
+        fortschrittZeigen();
+        materialZeigen();
+      }, 250);
     }
-    fortschrittZeigen();
-    materialZeigen();
-    blinkZeigen();
   }
 
-  // Spieler: Figur im Modell, Name darüber
-  const figurMaterial = new THREE.MeshBasicMaterial({ color: 0xf2c14e, depthTest: false, transparent: true });
-  const figuren = new Map();
-  const namenBox = $('.bp-spieler-namen');
-  function spielerAufsPlan(s) {
-    if (!anker || s.x == null || s.dimension !== 'minecraft:overworld') return null;
-    return [s.x - anker.x + g.x + 0.5, s.y - anker.y + g.y, s.z - anker.z + g.z + 0.5];
+  // s: 0 offen, 1 gebaut, Text = dort steht ein falscher Block
+  function blockSetzen(k, s, blinken, jetzt) {
+    const zelle = d.nummern[k];
+    if (zelle === undefined) return;
+    const neu = typeof s === 'string' ? STATUS.falsch : s === 1 ? STATUS.gebaut : STATUS.fehlt;
+    if (neu === STATUS.falsch) d.ist.set(zelle, s);
+    else d.ist.delete(zelle);
+    const alt = d.status[zelle];
+    if (neu === alt) return;
+    const y = Math.floor(zelle / (X * Z));
+    const z = zaehler[y][d.zellen[zelle] - 1];
+    if (alt === STATUS.gebaut) z.gebaut--;
+    if (neu === STATUS.gebaut) z.gebaut++;
+    d.status[zelle] = neu;
+    schmutzigeEbenen.add(y);
+    if (blinken) blinker.push({ zelle, farbe: neu === STATUS.gebaut ? blinkFarbe.gebaut : neu === STATUS.falsch ? blinkFarbe.falsch : blinkFarbe.weg, bis: jetzt + BLINK_MS });
   }
-  function figurenZeigen(spieler) {
-    const da = new Set();
-    for (const s of spieler) {
-      const p = spielerAufsPlan(s);
-      if (!p) continue;
-      da.add(s.name);
-      let f = figuren.get(s.name);
-      if (!f) {
-        const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.7, 1.4, 4, 10), figurMaterial);
-        mesh.renderOrder = 10;
-        szene.add(mesh);
-        const el = document.createElement('span');
-        el.className = 'bp-spieler-name';
-        el.textContent = s.name;
-        namenBox.append(el);
-        f = { mesh, el };
-        figuren.set(s.name, f);
-      }
-      f.mesh.position.set(p[0], p[1] + 1.1, p[2]);
+
+  function bloeckeAnwenden(liste, blinken) {
+    const jetzt = performance.now();
+    const vorher = hatDaten;
+    for (const [k, s] of liste) blockSetzen(k, s, blinken, jetzt);
+    hatDaten = true;
+    if (!vorher && sicht.modus !== 'alles') for (let y = 0; y < Y; y++) schmutzigeEbenen.add(y);
+    nachbauen();
+    if (blinken) blinkZeigen();
+  }
+
+  // Ganzer Stand (beim Verbinden oder nach dem Datei-Abgleich): nur Unterschiede anwenden, ohne Blinken.
+  function standAnwenden(f) {
+    if (!f) return;
+    const bits = Uint8Array.from(atob(f.gebaut), (ch) => ch.charCodeAt(0));
+    const falsch = new Map();
+    for (const [block, liste] of Object.entries(f.falsch)) for (const k of liste) falsch.set(k, block);
+    const liste = [];
+    for (let k = 0; k < d.anzahl; k++) liste.push([k, falsch.get(k) ?? (bits[k >> 3] & (1 << (k & 7)) ? 1 : 0)]);
+    bloeckeAnwenden(liste, false);
+  }
+
+  // ---------- Live: Spieler ----------
+  // Figuren mit Skin, weich nachgeführt. Positionen kommen mehrmals pro Sekunde.
+
+  const figuren = new Map(); // Name -> { bew, figur, el, hautKey, groesse }
+  const online = new Map(); // Name -> { name, mitarbeiter, mit_mod, haut }
+  const positionen = new Map(); // Name -> letzte Meldung [Name, x, y, z, Körper, Kopf, Nicken, Merker, Dimension]
+  const namenBox = $('.bp-spieler-namen');
+  let beobachtet = false;
+  let folge = null;
+
+  const aufsPlan = (w) => ({ x: w[1] - anker.x + g.x, y: w[2] - anker.y + g.y, z: w[3] - anker.z + g.z, koerper: w[4], kopf: w[5], nicken: w[6], merker: w[7] });
+  const hautVon = (name) => online.get(name)?.haut ?? null;
+  const hautSchluessel = (h) => (h ? `${h.hash ?? h.res}|${h.modell}` : 'ersatz');
+
+  async function figurAnlegen(name) {
+    const f = figuren.get(name);
+    if (!f) return;
+    const haut = hautVon(name);
+    const key = hautSchluessel(haut);
+    f.hautKey = key;
+    const bild = (await hautLaden(haut)) ?? ersatzHaut();
+    if (tot || figuren.get(name) !== f || f.hautKey !== key) return;
+    if (f.figur) {
+      szene.remove(f.figur.wurzel);
+      f.figur.dispose();
     }
-    for (const [name, f] of figuren) {
-      if (da.has(name)) continue;
-      szene.remove(f.mesh);
-      f.mesh.geometry.dispose();
-      f.el.remove();
-      figuren.delete(name);
-    }
+    f.figur = figurBauen(bild, haut?.modell === 'slim');
+    szene.add(f.figur.wurzel);
+    f.bew.schritt(0, f.figur);
     zeichnen();
   }
+
+  function positionAnwenden(w) {
+    const name = w[0];
+    positionen.set(name, w);
+    if (!anker || w[8] !== 'minecraft:overworld') return figurWeg(name);
+    const p = aufsPlan(w);
+    const f = figuren.get(name);
+    if (f) {
+      f.bew.setzen(p);
+      if (f.hautKey !== hautSchluessel(hautVon(name))) figurAnlegen(name);
+      return;
+    }
+    const el = document.createElement('span');
+    el.className = 'bp-spieler-name';
+    el.textContent = name;
+    namenBox.append(el);
+    figuren.set(name, { bew: new Bewegung(p), figur: null, el, hautKey: null, groesse: 1 });
+    figurAnlegen(name);
+    listePlanen();
+  }
+
+  function figurWeg(name) {
+    const f = figuren.get(name);
+    if (!f) return;
+    if (f.figur) {
+      szene.remove(f.figur.wurzel);
+      f.figur.dispose();
+    }
+    f.el.remove();
+    figuren.delete(name);
+    if (folge === name) folgenBeenden();
+    listePlanen();
+  }
+
+  // Beim Herauszoomen wachsen die Figuren mit, sonst wären sie im Gesamtbild nur Pünktchen.
+  const vorherPos = new THREE.Vector3();
+  function figurenBewegen(dt) {
+    let weiter = false;
+    for (const [name, f] of figuren) {
+      if (!f.figur) continue;
+      vorherPos.copy(f.bew.pos);
+      if (f.bew.schritt(dt, f.figur)) weiter = true;
+      f.groesse = Math.min(6, Math.max(1, kamera.position.distanceTo(f.bew.pos) / 90));
+      f.figur.wurzel.scale.setScalar(f.groesse);
+      if (folge === name) {
+        vorherPos.subVectors(f.bew.pos, vorherPos);
+        steuerung.target.add(vorherPos);
+        kamera.position.add(vorherPos);
+      }
+    }
+    return weiter;
+  }
+
   function spielerNamenZeigen(b, h) {
     for (const f of figuren.values()) {
-      hilf.copy(f.mesh.position);
-      hilf.y += 3;
+      hilf.copy(f.bew.pos);
+      hilf.y += 2.25 * f.groesse;
       hilf.project(kamera);
       const sichtbar = hilf.z < 1 && Math.abs(hilf.x) < 0.98 && Math.abs(hilf.y) < 0.98;
       f.el.style.display = sichtbar ? '' : 'none';
@@ -1076,35 +1151,83 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
     }
   }
 
+  // Kamera hängt sich an einen Spieler. Drehen und Zoomen geht weiter, die Ansicht wandert mit.
+  const folgenBox = $('.bp-folgen');
+  function folgen(name) {
+    const f = figuren.get(name);
+    if (!f) return;
+    folge = name;
+    steuerung.target.set(f.bew.pos.x, f.bew.pos.y + 1, f.bew.pos.z);
+    kamera.position.set(f.bew.pos.x - 26, f.bew.pos.y + 20, f.bew.pos.z + 26);
+    steuerung.update();
+    folgenBox.hidden = false;
+    $('[data-folgen-name]').textContent = `Kamera folgt ${name}`;
+    listePlanen();
+    zeichnen();
+  }
+  function folgenBeenden() {
+    if (!folge) return;
+    folge = null;
+    folgenBox.hidden = true;
+    listePlanen();
+  }
+  $('[data-folgen-aus]').addEventListener('click', folgenBeenden);
+
+  // ---------- Live: Liste und Feed ----------
+
   const uhr = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
   const DIMENSION = { 'minecraft:the_nether': 'im Nether', 'minecraft:the_end': 'im End' };
-  function spielerListeZeigen(daten) {
-    const liste = daten.spieler;
+  function wo(s) {
+    const w = positionen.get(s.name);
+    if (w) return w[8] === 'minecraft:overworld' ? `x ${Math.round(w[1])} · y ${Math.round(w[2])} · z ${Math.round(w[3])}` : (DIMENSION[w[8]] ?? w[8]);
+    return s.mit_mod ? '' : 'nicht in Sichtweite';
+  }
+
+  let listeGeplant = false;
+  function listePlanen() {
+    if (listeGeplant) return;
+    listeGeplant = true;
+    requestAnimationFrame(() => {
+      listeGeplant = false;
+      if (!tot) listeBauen();
+    });
+  }
+  function listeBauen() {
+    const liste = [...online.values()];
     const chip = $('[data-live-chip]');
-    chip.textContent = daten.beobachtet ? `${liste.length} online` : 'keine Daten';
-    chip.className = `chip ${daten.beobachtet ? 'ok' : 'off'}`;
-    $('[data-live-spieler]').innerHTML = liste.length
-      ? `<ul class="bp-spielerliste">${liste.map((s) => {
-          const p = spielerAufsPlan(s);
-          const wo = p ? `x ${s.x} · y ${s.y} · z ${s.z}` : DIMENSION[s.dimension] ?? (s.mit_mod ? '' : 'ohne Mod, Position unbekannt');
-          return `<li><button type="button" data-spieler="${esc(s.name)}" ${p ? '' : 'disabled'}>
-            <span class="pulse-punkt"></span>
-            <span class="bp-zone-name">${esc(s.name)}${s.mitarbeiter ? ` <span class="muted">(${esc(s.mitarbeiter)})</span>` : ''}<small>${esc(wo)}</small></span>
-          </button></li>`;
-        }).join('')}</ul>`
-      : `<p class="small muted">${daten.beobachtet ? 'Niemand online.' : 'Gerade meldet niemand etwas. Live-Daten gibt es, sobald jemand mit der Mod auf dem Server ist.'}</p>`;
-    $$('[data-spieler]').forEach((b) => b.addEventListener('click', () => {
-      const f = figuren.get(b.dataset.spieler);
-      if (!f) return;
-      steuerung.target.copy(f.mesh.position);
-      kamera.position.set(f.mesh.position.x - 45, f.mesh.position.y + 45, f.mesh.position.z + 45);
-      steuerung.update();
-      zeichnen();
-    }));
+    chip.textContent = beobachtet ? `${liste.length} online` : 'keine Daten';
+    chip.className = `chip ${beobachtet ? 'ok' : 'off'}`;
+    const el = $('[data-live-spieler]');
+    el.innerHTML = liste.length
+      ? `<ul class="bp-spielerliste">${liste.map((s) => `<li><button type="button" data-spieler="${esc(s.name)}" ${figuren.has(s.name) ? '' : 'disabled'} aria-pressed="${folge === s.name}" title="${figuren.has(s.name) ? 'Kamera folgt diesem Spieler' : ''}">
+            <img class="bp-kopf" data-kopf="${esc(s.name)}" alt="" width="24" height="24">
+            <span class="bp-zone-name">${esc(s.name)}${s.mitarbeiter ? ` <span class="muted">(${esc(s.mitarbeiter)})</span>` : ''}<small data-wo="${esc(s.name)}">${esc(wo(s))}</small></span>
+            ${s.mit_mod ? '<span class="chip ok bp-mod-chip">Mod</span>' : ''}
+          </button></li>`).join('')}</ul>`
+      : `<p class="small muted">${beobachtet ? 'Niemand online.' : 'Gerade ist niemand mit der Mod auf dem Server. Sobald jemand mit Bruno Live spielt, siehst du hier alle live.'}</p>`;
+    el.querySelectorAll('img[data-kopf]').forEach(async (img) => {
+      img.src = await kopfBild(hautVon(img.dataset.kopf));
+    });
+    el.querySelectorAll('[data-spieler]').forEach((b) => b.addEventListener('click', () => (folge === b.dataset.spieler ? folgenBeenden() : folgen(b.dataset.spieler))));
+  }
+  // Koordinaten in der Liste: nur den Text tauschen, viermal pro Sekunde.
+  let koordinatenGeplant = false;
+  function koordinatenPlanen() {
+    if (koordinatenGeplant) return;
+    koordinatenGeplant = true;
+    setTimeout(() => {
+      koordinatenGeplant = false;
+      if (tot) return;
+      wurzel.querySelectorAll('[data-wo]').forEach((el) => {
+        const s = online.get(el.dataset.wo);
+        if (s) el.textContent = wo(s);
+      });
+    }, 250);
   }
 
   const ereignisse = new Map();
-  function feedZeigen(neue) {
+  function feedZeigen(neue, ersetzen = false) {
+    if (ersetzen) ereignisse.clear();
     for (const e of neue) ereignisse.set(e.id, e);
     const liste = [...ereignisse.values()].sort((a, b) => b.id - a.id).slice(0, 30);
     $('[data-live-feed]').innerHTML = liste.length
@@ -1114,69 +1237,196 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
           if (e.minus) teile.push(`<b class="bp-minus">−${zahl.format(e.minus)}</b>`);
           if (e.falsch) teile.push(`<b class="bp-rot">${zahl.format(e.falsch)} falsch</b>`);
           const bloecke = Object.entries(e.bloecke).slice(0, 3).map(([b, n]) => `${zahl.format(n)} ${esc(blockName(b))}`).join(', ');
-          return `<li><span class="small muted">${uhr.format(new Date(e.am))}</span><span><b>${esc(e.mc_name)}</b> ${teile.join(' ')}${bloecke ? `<small>${bloecke}</small>` : ''}</span></li>`;
+          const wer = e.mc_name ? `<b>${esc(e.mc_name)}</b>` : '<b class="muted">Ohne Spieler</b>';
+          return `<li><span class="small muted">${uhr.format(new Date(e.am))}</span><span>${wer} ${teile.join(' ')}${bloecke ? `<small>${bloecke}</small>` : ''}</span></li>`;
         }).join('')
       : '<li class="small muted">Noch nichts gemeldet.</li>';
   }
 
+  // ---------- Einmessen ----------
+  // Ein einziger Block legt fest, wo das Gebäude in der Welt steht: der unterste an der Nordwest-Ecke.
+
+  const eckeGruppe = new THREE.Group();
+  const eckFarbe = 0xffb020;
+  const eckRahmen = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(1.14, 1.14, 1.14)),
+    new THREE.LineBasicMaterial({ color: eckFarbe, depthTest: false, transparent: true })
+  );
+  eckRahmen.position.set(ecke.x + 0.5, ecke.y + 0.5, ecke.z + 0.5);
+  eckRahmen.renderOrder = 20;
+  const eckSaeule = new THREE.Mesh(new THREE.BoxGeometry(0.4, 70, 0.4), new THREE.MeshBasicMaterial({ color: eckFarbe, transparent: true, opacity: 0.45, depthWrite: false }));
+  eckSaeule.position.set(ecke.x + 0.5, ecke.y + 35.5, ecke.z + 0.5);
+  const pfeilX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(ecke.x, ecke.y + 0.1, ecke.z - 3), 26, 0xd8342c, 4, 2.4);
+  const pfeilZ = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(ecke.x - 3, ecke.y + 0.1, ecke.z), 26, 0x2e7dd7, 4, 2.4);
+  eckeGruppe.add(eckRahmen, eckSaeule, pfeilX, pfeilZ);
+  szene.add(eckeGruppe);
+  const eckeSchild = $('.bp-anker-schild');
+  const pfeilSchilder = [['+X · Osten', ecke.x + 30, ecke.z - 3, 'x'], ['+Z · Süden', ecke.x - 3, ecke.z + 30, 'z']].map(([t, x, z, k]) => {
+    const el = document.createElement('span');
+    el.className = `bp-pfeil-schild bp-pfeil-${k}`;
+    el.textContent = t;
+    el.hidden = true;
+    buehne.append(el);
+    return { el, p: new THREE.Vector3(x, ecke.y + 1, z) };
+  });
+  let eckeAngefordert = false;
+  const eckeSichtbar = () => !anker || eckeAngefordert;
+  const schildPos = new THREE.Vector3(ecke.x + 0.5, ecke.y + 4, ecke.z + 0.5);
+  function eckeSchildZeigen(b, h) {
+    const an = eckeSichtbar();
+    eckeGruppe.visible = an;
+    eckeSchild.hidden = !an;
+    pfeilSchilder.forEach((s) => (s.el.hidden = !an));
+    if (!an) return;
+    const setzen = (el, p) => {
+      hilf.copy(p).project(kamera);
+      const sichtbar = hilf.z < 1 && Math.abs(hilf.x) < 1.1 && Math.abs(hilf.y) < 1.1;
+      el.style.display = sichtbar ? '' : 'none';
+      el.style.transform = `translate(${((hilf.x + 1) / 2) * b}px, ${((1 - hilf.y) / 2) * h}px) translate(-50%, -100%)`;
+    };
+    setzen(eckeSchild, schildPos);
+    pfeilSchilder.forEach((s) => setzen(s.el, s.p));
+  }
+  function eckeAnsehen() {
+    eckeAngefordert = true;
+    folgenBeenden();
+    steuerung.target.set(ecke.x + 0.5, ecke.y + 2, ecke.z + 0.5);
+    kamera.position.set(ecke.x - 34, ecke.y + 24, ecke.z - 30);
+    steuerung.update();
+    zeichnen();
+  }
+
   function standortZeigen() {
     const el = $('[data-live-standort]');
+    const welt = anker ? `In der Welt steht er bei <b>${anker.x} / ${anker.y} / ${anker.z}</b>.` : 'In der Welt ist er noch nicht eingemessen.';
+    const erklaerung = `
+      <div class="bp-einmessen">
+        <p><b>Eingemessen wird genau ein Block:</b> der unterste an der Nordwest-Ecke des Gebäudes (Plan x 0 · y 0 · z 0), ${esc(blockName(ecke.block))}. ${welt}</p>
+        <p class="small">Von dort geht das Gebäude ${g.breite} Blöcke nach Osten (+X), ${g.tiefe} nach Süden (+Z) und ${g.hoehe} nach oben.</p>
+        <ol class="small">
+          <li>Den Block in der Welt setzen, wo die Ecke hin soll.</li>
+          <li>Mit dem Fadenkreuz draufschauen, <kbd>F3</kbd> drücken: Rechts steht <i>Targeted Block</i> mit X, Y, Z.</li>
+          <li>Die drei Zahlen hier eintragen. Schneller mit der Mod: draufschauen und <code>/bruno ecke</code> tippen (nur Geschäftsführung).</li>
+        </ol>
+        <button type="button" class="btn btn-ghost btn-sm" data-ecke-zeigen>Ecke im Modell zeigen</button>
+      </div>`;
     const hinweis = anker ? '' : `<p class="bp-falsch">Standort fehlt: Ohne ihn kann die Mod nur melden, wer online ist, aber keine Blöcke.</p>`;
     const adresse = server ? '' : `<p class="bp-falsch">Server fehlt: Ohne Adresse meldet die Mod nichts.</p>`;
     if (!istAdmin) {
-      el.innerHTML = hinweis || adresse ? `<h3 class="bp-zwischen">Einrichtung</h3>${hinweis}${adresse}<p class="small muted">Das stellt die Geschäftsführung hier ein.</p>` : '';
-      return;
-    }
-    el.innerHTML = `
+      el.innerHTML = `<details class="bp-standort" ${anker ? '' : 'open'}><summary>Standort in der Welt</summary>${hinweis}${adresse}${erklaerung}<p class="small muted">Einmessen kann nur die Geschäftsführung.</p></details>`;
+    } else {
+      el.innerHTML = `
       <details class="bp-standort" ${anker && server ? '' : 'open'}>
         <summary>Standort und Server</summary>
-        ${hinweis}${adresse}
+        ${hinweis}${adresse}${erklaerung}
         <form class="form" data-standort-form>
           <div class="field"><label>Server-Adresse</label><input class="input" name="server" value="${esc(server ?? '')}" placeholder="z. B. bruno.aternos.me" maxlength="200" autocomplete="off"><span class="hint">Nur auf diesem Server meldet die Mod.</span></div>
-          <div class="field"><label>Nordwest-Ecke des Gebäudes in der Welt (X / Y / Z)</label>
+          <div class="field"><label>Ankerblock in der Welt (X / Y / Z)</label>
             <div class="bp-koordinaten">
-              <input class="input" name="x" inputmode="numeric" aria-label="X" value="${anker?.x ?? ''}">
-              <input class="input" name="y" inputmode="numeric" aria-label="Y" value="${anker?.y ?? ''}">
-              <input class="input" name="z" inputmode="numeric" aria-label="Z" value="${anker?.z ?? ''}">
+              <input class="input" name="x" inputmode="numeric" aria-label="X" placeholder="X" value="${anker?.x ?? ''}">
+              <input class="input" name="y" inputmode="numeric" aria-label="Y" placeholder="Y" value="${anker?.y ?? ''}">
+              <input class="input" name="z" inputmode="numeric" aria-label="Z" placeholder="Z" value="${anker?.z ?? ''}">
             </div>
-            <span class="hint">Tipp: Haus nicht versetzen, sobald gebaut wird. Beim Ändern beginnt der Live-Stand neu.</span>
+            <span class="hint">Haus nicht versetzen, sobald gebaut wird. Beim Ändern beginnt der Live-Stand neu.</span>
           </div>
           <button class="btn btn-primary btn-sm">Speichern</button>
         </form>
       </details>`;
-    $('[data-standort-form]').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const f = new FormData(e.target);
-      const leer = ['x', 'y', 'z'].every((k) => !String(f.get(k)).trim());
-      const neu = leer ? null : { x: Number(f.get('x')), y: Number(f.get('y')), z: Number(f.get('z')) };
-      if (JSON.stringify(neu) !== JSON.stringify(anker ?? null) && anker && !confirm('Standort wirklich ändern? Der Live-Stand beginnt dann neu.')) return;
-      try {
-        await speichern({ anker: neu, server: String(f.get('server')).trim() });
-      } catch (ex) {
-        toast(ex.message, true);
-      }
+      $('[data-standort-form]').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const f = new FormData(e.target);
+        const leer = ['x', 'y', 'z'].every((k) => !String(f.get(k)).trim());
+        const neu = leer ? null : { x: Number(f.get('x')), y: Number(f.get('y')), z: Number(f.get('z')) };
+        if (JSON.stringify(neu) !== JSON.stringify(anker ?? null) && anker && !confirm('Standort wirklich ändern? Der Live-Stand beginnt dann neu.')) return;
+        try {
+          await speichern({ anker: neu, server: String(f.get('server')).trim() });
+        } catch (ex) {
+          toast(ex.message, true);
+        }
+      });
+    }
+    // Wer die Einstellung aufklappt, sieht die Ecke im Modell. Zugeklappt verschwindet sie wieder.
+    const details = $('.bp-standort');
+    details.addEventListener('toggle', () => {
+      eckeAngefordert = details.open && !!anker;
+      zeichnen();
     });
+    if (details.open && anker) eckeAngefordert = true;
+    $('[data-ecke-zeigen]').addEventListener('click', eckeAnsehen);
   }
 
-  function liveEmpfangen(daten) {
+  // ---------- Nachrichten aus dem Live-Raum ----------
+
+  function onlineSetzen(m) {
+    beobachtet = !!m.beobachtet;
+    online.clear();
+    for (const s of m.spieler) online.set(s.name, s);
+    for (const [name, f] of figuren) if (f.hautKey !== hautSchluessel(hautVon(name))) figurAnlegen(name);
+    listePlanen();
+  }
+
+  function liveEmpfangen(m) {
     if (tot) return;
-    spielerListeZeigen(daten);
-    figurenZeigen(daten.spieler);
-    if (daten.ereignisse) feedZeigen(daten.ereignisse);
-    if (daten.chunks?.length) chunksAnwenden(daten.chunks, false);
+    switch (m.t) {
+      case 'online':
+        onlineSetzen(m);
+        break;
+      case 'start': {
+        onlineSetzen(m);
+        const da = new Set(m.pos.map((w) => w[0]));
+        for (const name of [...figuren.keys()]) if (!da.has(name)) figurWeg(name);
+        positionen.clear();
+        for (const w of m.pos) positionAnwenden(w);
+        standAnwenden(m.fortschritt);
+        feedZeigen(m.feed, true);
+        zeichnen();
+        break;
+      }
+      case 'pos':
+        for (const w of m.liste) positionAnwenden(w);
+        for (const name of m.weg ?? []) {
+          positionen.delete(name);
+          figurWeg(name);
+        }
+        koordinatenPlanen();
+        zeichnen();
+        break;
+      case 'bloecke':
+        bloeckeAnwenden(m.liste, !m.sync);
+        break;
+      case 'stand':
+        standAnwenden(m.fortschritt);
+        break;
+      case 'feed':
+        feedZeigen([m.eintrag]);
+        break;
+      case 'haut':
+        hautVergessen(m.res);
+        for (const [name, f] of figuren) {
+          if (hautVon(name)?.res !== m.res) continue;
+          f.hautKey = null;
+          figurAnlegen(name);
+        }
+        listePlanen();
+        break;
+    }
   }
 
-  chunksAnwenden(live.chunks, true);
+  function liveGetrennt() {
+    const chip = $('[data-live-chip]');
+    chip.textContent = 'Verbindung weg …';
+    chip.className = 'chip off';
+  }
+
   modusZeigen();
   fortschrittZeigen();
   materialZeigen();
-  spielerListeZeigen({ spieler: [], beobachtet: false });
-  feedZeigen([]);
   standortZeigen();
   themaAnwenden();
   anpassen();
   blick('iso');
   geometrieBauen();
+  liveEmpfangen({ t: 'start', ...start });
 
   const ende = () => {
     tot = true;
@@ -1184,7 +1434,9 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
     clearInterval(blinkTakt);
     blinkMesh.geometry.dispose();
     blinkMesh.dispose();
-    for (const f of figuren.values()) f.mesh.geometry.dispose();
+    for (const f of figuren.values()) f.figur?.dispose();
+    eckRahmen.geometry.dispose();
+    eckSaeule.geometry.dispose();
     document.removeEventListener('thema', themaAnwenden);
     groesse.disconnect();
     steuerung.dispose();
@@ -1194,5 +1446,5 @@ export function zeigeBauplan(wurzel, { plan, fortschritt, anker: ankerDaten, ser
     renderer.dispose();
     renderer.forceContextLoss();
   };
-  return { ende, liveEmpfangen };
+  return { ende, liveEmpfangen, liveGetrennt };
 }
