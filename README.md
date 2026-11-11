@@ -129,6 +129,7 @@ Aternos erlaubt keine eigenen Server-Mods, darum läuft der Abgleich im Client: 
 
 - Positionen gehen bis zu zehnmal pro Sekunde raus, mit Blickrichtung und Haltung (schleicht, sprintet, schlägt). Jede Mod meldet auch die Mitspieler in ihrer Sichtweite, auch solche ohne Mod.
 - Ein geänderter Block wird per Mixin im selben Tick erkannt und sofort gemeldet. Wer am nächsten dran stand, bekommt ihn im Feed gutgeschrieben. Betonpulver zählt als Beton derselben Farbe (auch im Datei-Abgleich).
+- **Gebaut von:** Der Live-Raum merkt sich zu jedem Planblock, wer ihn gesetzt hat, und zeigt im Bauplan unter Live die Rangliste. Gezählt wird, was richtig steht: Wird ein Block abgebaut oder falsch ersetzt, verliert ihn sein Bauer. Blöcke, die beim ersten Hinsehen schon standen oder ohne Spieler in der Nähe gesetzt wurden, stehen unter „Ohne Zuordnung“. Alles, was vor dem Zähler gebaut war, zählt für Bruno_Soehne.
 - Skins: echte Skins holt der Worker bei Mojang (`/api/live/haut/<hash>`), Standard-Skins schickt die Mod einmal mit.
 
 Einmalig einrichten:
