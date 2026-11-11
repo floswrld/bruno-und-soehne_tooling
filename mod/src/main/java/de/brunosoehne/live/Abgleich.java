@@ -146,6 +146,8 @@ final class Abgleich {
 	final int unbekannteBloecke;
 	private final Block[] blockSoll;
 	private final Map<Block, String> baustoffe = new HashMap<>();
+	/** Gleichwertige Blöcke: Betonpulver zählt als der Beton derselben Farbe. */
+	private final Map<Block, Block> gleichwertig = new HashMap<>();
 	private final Map<Long, Stueck> nachChunk = new HashMap<>();
 	private final Stueck[] stuecke;
 	private final ArrayDeque<Stueck> markierte = new ArrayDeque<>();
@@ -167,6 +169,11 @@ final class Abgleich {
 			if (BuiltInRegistries.BLOCK.containsKey(id)) {
 				blockSoll[i] = BuiltInRegistries.BLOCK.getValue(id);
 				if (!NATUR.matcher(plan.namen[i]).matches()) baustoffe.put(blockSoll[i], plan.namen[i]);
+				// Beton wird oft als Pulver gesetzt und erst später gehärtet: Pulver zählt schon als Beton.
+				Identifier pulver = Identifier.parse(plan.namen[i] + "_powder");
+				if (plan.namen[i].endsWith("_concrete") && BuiltInRegistries.BLOCK.containsKey(pulver)) {
+					gleichwertig.put(BuiltInRegistries.BLOCK.getValue(pulver), blockSoll[i]);
+				}
 			} else {
 				unbekannt++;
 				BrunoLive.LOG.warn("Block aus dem Plan gibt es in dieser Version nicht: {}", plan.namen[i]);
@@ -303,6 +310,7 @@ final class Abgleich {
 			int z = (s.cz << 4) | ((p >> 4) & 15);
 			stelle.set(x, y, z);
 			Block ist = chunk.getBlockState(stelle).getBlock();
+			ist = gleichwertig.getOrDefault(ist, ist);
 			int n = s.nummern[i];
 			byte neu;
 			String falsch = null;
