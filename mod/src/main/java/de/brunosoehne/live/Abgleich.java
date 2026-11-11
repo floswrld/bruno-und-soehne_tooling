@@ -1,15 +1,14 @@
 package de.brunosoehne.live;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 import java.util.regex.Pattern;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
@@ -19,75 +18,60 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
- * Vergleicht die geladenen Chunks mit dem Bauplan.
+ * Vergleicht die Welt mit dem Bauplan, Block für Block.
  *
- * <p>Der Client kennt alle Blöcke in seiner Sichtweite. Darum läuft der Abgleich reihum über die Chunks des Plans,
- * mit festem Budget je Tick, und braucht keine Eingriffe ins Spiel. Abgebaute Blöcke fallen so genauso auf wie
- * gesetzte, und was ein anderer gebaut hat, zählt auch.
+ * <p>Jeder Planblock hat eine Nummer (Reihenfolge im Plan, Website und Mod rechnen sie gleich aus). Der Live-Raum
+ * kennt den Stand aller Nummern und schickt ihn beim Verbinden mit. Die Mod meldet nur Unterschiede:
  *
- * <p>Die Reihenfolge der Blöcke je Chunk ist die Reihenfolge der Plannummern. Website und Mod rechnen sie gleich aus.
+ * <ul>
+ *   <li>Ändert sich ein Block, den sie schon gesehen hat, ist das eine echte Änderung (mit dem Spieler, der am nächsten
+ *       dran war).
+ *   <li>Sieht sie einen Chunk zum ersten Mal, meldet sie, was vom bekannten Stand abweicht, ohne Spieler.
+ * </ul>
+ *
+ * <p>Geänderte Blöcke kommen über einen Mixin sofort an die Reihe. Zur Sicherheit läuft der Abgleich außerdem reihum
+ * über alle geladenen Chunks des Plans.
  */
 final class Abgleich {
 	/** Was natürlich in der Welt vorkommt, gilt nicht als „falsch gesetzt“. Gleiche Liste wie scripts/bauplan-sync.mjs. */
 	private static final Pattern NATUR = Pattern.compile("^minecraft:(stone|andesite|tuff|deepslate|gravel|sand|grass_block|moss_block|podzol|coarse_dirt|dirt|water|lava|short_grass|fern|poppy|oxeye_daisy|dandelion|cornflower|allium|oak_log|oak_leaves|birch_log|birch_leaves|spruce_log|spruce_leaves|dark_oak_log|dark_oak_leaves|azalea_leaves|flowering_azalea_leaves|sugar_cane|lily_pad|bamboo)$");
+	private static final byte UNBEKANNT = -1;
+	private static final byte OFFEN = 0;
+	private static final byte GEBAUT = 1;
+	private static final byte FALSCH = 2;
+	private static final int CHUNKS_SOFORT_JE_TICK = 48;
+	private static final int BLOECKE_REIHUM_JE_TICK = 2500;
 
-	private static final int BLOECKE_JE_TICK = 3000;
-	private static final int CHUNKS_JE_MELDUNG = 16;
+	/** Der Plan, fertig zerlegt. Ohne Spielzustand, wird im Netz-Thread gebaut und zwischen Sitzungen behalten. */
+	static final class Plan {
+		final String hash;
+		final int gebX;
+		final int gebY;
+		final int gebZ;
+		final String[] namen; // Blockarten
+		final int[] stelle; // je Nummer: x | z << 10 | y << 20 im Planraster
+		final short[] soll; // je Nummer: Index in namen
 
-	private static final class Stueck {
-		final int cx;
-		final int cz;
-		final int[] stellen; // Welt-Position, x und z je 4 Bit, y darüber
-		final short[] soll; // Index in BLOCK_SOLL
-		byte[] bits; // zuletzt gesehen, null = noch nie
-		Map<String, List<Integer>> falsch = Map.of();
-		boolean offen; // muss noch gemeldet werden
-
-		Stueck(int cx, int cz, int[] stellen, short[] soll) {
-			this.cx = cx;
-			this.cz = cz;
-			this.stellen = stellen;
+		private Plan(String hash, int gebX, int gebY, int gebZ, String[] namen, int[] stelle, short[] soll) {
+			this.hash = hash;
+			this.gebX = gebX;
+			this.gebY = gebY;
+			this.gebZ = gebZ;
+			this.namen = namen;
+			this.stelle = stelle;
 			this.soll = soll;
 		}
-	}
 
-	/** Änderungen seit der letzten Meldung, für die Live-Anzeige. */
-	static final class Ereignis {
-		int plus;
-		int minus;
-		int falsch;
-		final Map<String, Integer> bloecke = new HashMap<>();
-
-		boolean leer() {
-			return plus == 0 && minus == 0 && falsch == 0;
+		int gesamt() {
+			return stelle.length;
 		}
-	}
 
-	final String planHash;
-	final int ankerX;
-	final int ankerY;
-	final int ankerZ;
-	final int unbekannteBloecke;
-	private final Stueck[] stuecke;
-	private final Block[] blockSoll;
-	private final String[] blockName;
-	private final Map<Block, String> baustoffe = new HashMap<>();
-	private final ArrayDeque<Stueck> warteschlange = new ArrayDeque<>();
-	private final BlockPos.MutableBlockPos stelle = new BlockPos.MutableBlockPos();
-	private Ereignis ereignis = new Ereignis();
-	private int reihum;
-
-	/** Vorbereitung ohne Spielzustand, läuft im Netz-Thread. */
-	record Vorlage(String hash, int ankerX, int ankerY, int ankerZ, String[] namen, List<int[]> kopf, List<int[]> stellen, List<short[]> soll) {
-		static Vorlage aus(JsonObject plan, int ankerX, int ankerY, int ankerZ) {
+		static Plan aus(JsonObject plan) {
 			JsonObject groesse = plan.getAsJsonObject("groesse");
 			JsonObject gebaeude = plan.getAsJsonObject("gebaeude");
 			int gx = groesse.get("x").getAsInt();
 			int gz = groesse.get("z").getAsInt();
-			int vonX = ankerX - gebaeude.get("x").getAsInt();
-			int vonY = ankerY - gebaeude.get("y").getAsInt();
-			int vonZ = ankerZ - gebaeude.get("z").getAsInt();
-
+			if (gx >= 1024 || gz >= 1024 || groesse.get("y").getAsInt() >= 1024) throw new IllegalStateException("Plan zu groß.");
 			JsonObject palette = plan.getAsJsonObject("palette");
 			Map<Character, Short> index = new HashMap<>();
 			List<String> namen = new ArrayList<>();
@@ -102,9 +86,10 @@ final class Abgleich {
 				}
 				index.put(zeichen.charAt(0), i);
 			}
-
-			// Chunk -> Blöcke, aufsteigend nach Plannummer: Ebene für Ebene, dann z, dann x.
-			Map<Long, List<long[]>> sammlung = new TreeMap<>();
+			int gesamt = plan.get("gesamt").getAsInt();
+			int[] stelle = new int[gesamt];
+			short[] soll = new short[gesamt];
+			int n = 0;
 			JsonArray ebenen = plan.getAsJsonArray("layers");
 			for (int y = 0; y < ebenen.size(); y++) {
 				String text = ebenen.get(y).getAsString();
@@ -117,13 +102,11 @@ final class Abgleich {
 						continue;
 					}
 					if (c != '.') {
-						short soll = index.get(c);
-						for (int n = 0; n < zahl; n++) {
-							int q = zelle + n;
-							int wx = vonX + q % gx;
-							int wz = vonZ + q / gx;
-							long key = (((long) (wx >> 4)) << 32) ^ ((wz >> 4) & 0xffffffffL);
-							sammlung.computeIfAbsent(key, s -> new ArrayList<>()).add(new long[] {(wx & 15) | ((wz & 15) << 4) | ((long) (vonY + y + 2048) << 8), soll});
+						short s = index.get(c);
+						for (int q = zelle; q < zelle + zahl; q++) {
+							stelle[n] = (q % gx) | ((q / gx) << 10) | (y << 20);
+							soll[n] = s;
+							n++;
 						}
 					}
 					zelle += zahl;
@@ -131,198 +114,242 @@ final class Abgleich {
 				}
 				if (zelle != gx * gz) throw new IllegalStateException("Ebene " + y + " hat die falsche Länge.");
 			}
-
-			List<int[]> kopf = new ArrayList<>();
-			List<int[]> stellen = new ArrayList<>();
-			List<short[]> soll = new ArrayList<>();
-			for (Map.Entry<Long, List<long[]>> e : sammlung.entrySet()) {
-				List<long[]> liste = e.getValue();
-				int[] s = new int[liste.size()];
-				short[] b = new short[liste.size()];
-				for (int i = 0; i < s.length; i++) {
-					s[i] = (int) liste.get(i)[0];
-					b[i] = (short) liste.get(i)[1];
-				}
-				kopf.add(new int[] {(int) (e.getKey() >> 32), (int) (long) e.getKey()});
-				stellen.add(s);
-				soll.add(b);
-			}
-			return new Vorlage(plan.get("hash").getAsString(), ankerX, ankerY, ankerZ, namen.toArray(new String[0]), kopf, stellen, soll);
+			if (n != gesamt) throw new IllegalStateException("Blockzahl passt nicht: " + n + " statt " + gesamt);
+			return new Plan(plan.get("hash").getAsString(), gebaeude.get("x").getAsInt(), gebaeude.get("y").getAsInt(), gebaeude.get("z").getAsInt(), namen.toArray(new String[0]), stelle, soll);
 		}
 	}
 
-	/** Blöcke auflösen und fertig machen. Muss im Spiel-Thread laufen. */
-	Abgleich(Vorlage v) {
-		planHash = v.hash();
-		ankerX = v.ankerX();
-		ankerY = v.ankerY();
-		ankerZ = v.ankerZ();
-		blockName = v.namen();
-		blockSoll = new Block[blockName.length];
+	private static final class Stueck {
+		final int cx;
+		final int cz;
+		final int[] stellen; // Welt-Position im Chunk: x und z je 4 Bit, y + 2048 darüber
+		final int[] nummern;
+		byte[] gesehen; // null = Chunk gerade nicht geladen oder noch nie gesehen
+		final Map<Integer, String> falschGesehen = new HashMap<>();
+		boolean markiert;
+
+		Stueck(int cx, int cz, int[] stellen, int[] nummern) {
+			this.cx = cx;
+			this.cz = cz;
+			this.stellen = stellen;
+			this.nummern = nummern;
+		}
+	}
+
+	/** Eine Änderung zum Melden. zustand ist 0 (offen), 1 (gebaut) oder der Name des falschen Blocks. */
+	record Aenderung(int nummer, Object zustand, int x, int y, int z) {}
+
+	final Plan plan;
+	final int ankerX;
+	final int ankerY;
+	final int ankerZ;
+	final int unbekannteBloecke;
+	private final Block[] blockSoll;
+	private final Map<Block, String> baustoffe = new HashMap<>();
+	private final Map<Long, Stueck> nachChunk = new HashMap<>();
+	private final Stueck[] stuecke;
+	private final ArrayDeque<Stueck> markierte = new ArrayDeque<>();
+	private final byte[] bekannt;
+	private final Map<Integer, String> bekanntFalsch = new HashMap<>();
+	private final BlockPos.MutableBlockPos stelle = new BlockPos.MutableBlockPos();
+	private int reihum;
+
+	/** Muss im Spiel-Thread laufen (Blockregister). */
+	Abgleich(Plan plan, int ankerX, int ankerY, int ankerZ) {
+		this.plan = plan;
+		this.ankerX = ankerX;
+		this.ankerY = ankerY;
+		this.ankerZ = ankerZ;
+		blockSoll = new Block[plan.namen.length];
 		int unbekannt = 0;
-		for (int i = 0; i < blockName.length; i++) {
-			Identifier id = Identifier.parse(blockName[i]);
+		for (int i = 0; i < plan.namen.length; i++) {
+			Identifier id = Identifier.parse(plan.namen[i]);
 			if (BuiltInRegistries.BLOCK.containsKey(id)) {
 				blockSoll[i] = BuiltInRegistries.BLOCK.getValue(id);
-				if (!NATUR.matcher(blockName[i]).matches()) baustoffe.put(blockSoll[i], blockName[i]);
+				if (!NATUR.matcher(plan.namen[i]).matches()) baustoffe.put(blockSoll[i], plan.namen[i]);
 			} else {
 				unbekannt++;
-				BrunoLive.LOG.warn("Block aus dem Plan gibt es in dieser Version nicht: {}", blockName[i]);
+				BrunoLive.LOG.warn("Block aus dem Plan gibt es in dieser Version nicht: {}", plan.namen[i]);
 			}
 		}
 		unbekannteBloecke = unbekannt;
-		stuecke = new Stueck[v.kopf().size()];
-		for (int i = 0; i < stuecke.length; i++) {
-			int[] k = v.kopf().get(i);
-			stuecke[i] = new Stueck(k[0], k[1], v.stellen().get(i), v.soll().get(i));
+		bekannt = new byte[plan.gesamt()];
+
+		int vonX = ankerX - plan.gebX;
+		int vonY = ankerY - plan.gebY;
+		int vonZ = ankerZ - plan.gebZ;
+		Map<Long, List<Integer>> sammlung = new HashMap<>();
+		for (int n = 0; n < plan.gesamt(); n++) {
+			int s = plan.stelle[n];
+			int wx = vonX + (s & 1023);
+			int wz = vonZ + ((s >> 10) & 1023);
+			sammlung.computeIfAbsent(schluessel(wx >> 4, wz >> 4), (k) -> new ArrayList<>()).add(n);
+		}
+		stuecke = new Stueck[sammlung.size()];
+		int k = 0;
+		for (Map.Entry<Long, List<Integer>> e : sammlung.entrySet()) {
+			List<Integer> liste = e.getValue();
+			int[] stellen = new int[liste.size()];
+			int[] nummern = new int[liste.size()];
+			for (int i = 0; i < stellen.length; i++) {
+				int n = liste.get(i);
+				int s = plan.stelle[n];
+				int wx = vonX + (s & 1023);
+				int wz = vonZ + ((s >> 10) & 1023);
+				int wy = vonY + (s >> 20);
+				stellen[i] = (wx & 15) | ((wz & 15) << 4) | ((wy + 2048) << 8);
+				nummern[i] = n;
+			}
+			Stueck st = new Stueck((int) (e.getKey() >> 32), (int) (long) e.getKey(), stellen, nummern);
+			stuecke[k++] = st;
+			nachChunk.put(e.getKey(), st);
 		}
 	}
 
-	/** Ein Happen Abgleich. Wird jeden Tick aufgerufen und kostet höchstens ein paar tausend Blockabfragen. */
-	void tick(ClientLevel welt) {
-		int budget = BLOECKE_JE_TICK;
+	private static long schluessel(int cx, int cz) {
+		return (((long) cx) << 32) ^ (cz & 0xffffffffL);
+	}
+
+	/** Stand des Live-Raums übernehmen. Danach wird jeder Chunk wie zum ersten Mal verglichen. */
+	void bekanntSetzen(String gebautBase64, JsonArray falsch) {
+		byte[] bits = Base64.getDecoder().decode(gebautBase64);
+		for (int n = 0; n < bekannt.length; n++) bekannt[n] = (n >> 3) < bits.length && (bits[n >> 3] & (1 << (n & 7))) != 0 ? GEBAUT : OFFEN;
+		bekanntFalsch.clear();
+		for (JsonElement e : falsch) {
+			JsonArray p = e.getAsJsonArray();
+			int n = p.get(0).getAsInt();
+			if (n < 0 || n >= bekannt.length) continue;
+			bekannt[n] = FALSCH;
+			bekanntFalsch.put(n, p.get(1).getAsString());
+		}
+		for (Stueck s : stuecke) {
+			s.gesehen = null;
+			s.falschGesehen.clear();
+			markieren(s);
+		}
+	}
+
+	/** Was andere gemeldet haben. */
+	void bekanntAendern(JsonArray liste) {
+		for (JsonElement e : liste) {
+			JsonArray p = e.getAsJsonArray();
+			int n = p.get(0).getAsInt();
+			if (n < 0 || n >= bekannt.length) continue;
+			JsonElement s = p.get(1);
+			if (s.getAsJsonPrimitive().isString()) {
+				bekannt[n] = FALSCH;
+				bekanntFalsch.put(n, s.getAsString());
+			} else {
+				bekannt[n] = s.getAsInt() == 1 ? GEBAUT : OFFEN;
+				bekanntFalsch.remove(n);
+			}
+		}
+	}
+
+	/** Aus dem Mixin: In diesem Chunk hat sich ein Block geändert. */
+	void blockGeaendert(int x, int z) {
+		Stueck s = nachChunk.get(schluessel(x >> 4, z >> 4));
+		if (s != null) markieren(s);
+	}
+
+	void chunkGeladen(int cx, int cz) {
+		Stueck s = nachChunk.get(schluessel(cx, cz));
+		if (s != null) markieren(s);
+	}
+
+	void chunkEntladen(int cx, int cz) {
+		Stueck s = nachChunk.get(schluessel(cx, cz));
+		if (s == null) return;
+		// Was in der Zwischenzeit passiert, war nicht zu sehen: Beim nächsten Laden zählt es als erster Blick.
+		s.gesehen = null;
+		s.falschGesehen.clear();
+	}
+
+	private void markieren(Stueck s) {
+		if (s.markiert) return;
+		s.markiert = true;
+		markierte.add(s);
+	}
+
+	/** Ein Tick Abgleich. Was sich geändert hat, landet in live (mit Spieler) oder ersterBlick (ohne). */
+	void tick(ClientLevel welt, List<Aenderung> live, List<Aenderung> ersterBlick) {
+		for (int i = 0; i < CHUNKS_SOFORT_JE_TICK && !markierte.isEmpty(); i++) {
+			Stueck s = markierte.poll();
+			s.markiert = false;
+			pruefen(s, welt, live, ersterBlick);
+		}
+		int budget = BLOECKE_REIHUM_JE_TICK;
 		for (int i = 0; i < stuecke.length && budget > 0; i++) {
 			Stueck s = stuecke[reihum];
 			reihum = (reihum + 1) % stuecke.length;
-			LevelChunk chunk = welt.getChunkSource().getChunkNow(s.cx, s.cz);
-			if (chunk == null) continue; // nicht in Sichtweite
-			pruefen(s, chunk, welt);
-			budget -= s.stellen.length;
+			if (pruefen(s, welt, live, ersterBlick)) budget -= s.stellen.length;
 		}
 	}
 
-	private void pruefen(Stueck s, LevelChunk chunk, ClientLevel welt) {
-		int n = s.stellen.length;
-		byte[] bits = new byte[(n + 7) / 8];
-		Map<String, List<Integer>> falsch = new TreeMap<>();
-		for (int i = 0; i < n; i++) {
+	private boolean pruefen(Stueck s, ClientLevel welt, List<Aenderung> live, List<Aenderung> ersterBlick) {
+		LevelChunk chunk = welt.getChunkSource().getChunkNow(s.cx, s.cz);
+		if (chunk == null) {
+			s.gesehen = null;
+			s.falschGesehen.clear();
+			return false;
+		}
+		boolean erstmals = s.gesehen == null;
+		if (erstmals) s.gesehen = new byte[s.stellen.length];
+		for (int i = 0; i < s.stellen.length; i++) {
 			int p = s.stellen[i];
 			int y = (p >> 8) - 2048;
 			if (y < welt.getMinY() || y > welt.getMaxY()) continue;
-			stelle.set((s.cx << 4) | (p & 15), y, (s.cz << 4) | ((p >> 4) & 15));
+			int x = (s.cx << 4) | (p & 15);
+			int z = (s.cz << 4) | ((p >> 4) & 15);
+			stelle.set(x, y, z);
 			Block ist = chunk.getBlockState(stelle).getBlock();
-			if (ist == blockSoll[s.soll[i]]) {
-				bits[i >> 3] |= (byte) (1 << (i & 7));
+			int n = s.nummern[i];
+			byte neu;
+			String falsch = null;
+			if (ist == blockSoll[plan.soll[n]]) {
+				neu = GEBAUT;
 			} else {
-				String name = baustoffe.get(ist);
-				if (name != null) falsch.computeIfAbsent(name, k -> new ArrayList<>()).add(i);
+				falsch = baustoffe.get(ist);
+				neu = falsch != null ? FALSCH : OFFEN;
 			}
-		}
-		if (s.bits != null && Arrays.equals(bits, s.bits) && falsch.equals(s.falsch)) return;
-		boolean aenderung = s.bits != null;
-		if (aenderung) unterschiedZaehlen(s, bits, falsch);
-		s.bits = bits;
-		s.falsch = falsch;
-		// Was sich gerade geändert hat, geht vor: Beim Betreten warten sonst alle Chunks der Umgebung davor.
-		if (aenderung) {
-			if (s.offen) warteschlange.remove(s);
-			warteschlange.addFirst(s);
-		} else if (!s.offen) {
-			warteschlange.addLast(s);
-		}
-		s.offen = true;
-	}
-
-	/** Noch mehr offen, als in eine Meldung passt: Beim Betreten darf schneller gemeldet werden. */
-	boolean rueckstand() {
-		return warteschlange.size() > CHUNKS_JE_MELDUNG;
-	}
-
-	private void unterschiedZaehlen(Stueck s, byte[] neu, Map<String, List<Integer>> falsch) {
-		for (int i = 0; i < s.stellen.length; i++) {
-			boolean vorher = (s.bits[i >> 3] & (1 << (i & 7))) != 0;
-			boolean jetzt = (neu[i >> 3] & (1 << (i & 7))) != 0;
-			if (jetzt && !vorher) {
-				ereignis.plus++;
-				ereignis.bloecke.merge(blockName[s.soll[i]], 1, Integer::sum);
-			} else if (vorher && !jetzt) {
-				ereignis.minus++;
+			if (erstmals) {
+				// Erster Blick: nur melden, was vom bekannten Stand abweicht.
+				if (neu != bekannt[n] || (neu == FALSCH && !falsch.equals(bekanntFalsch.get(n)))) {
+					ersterBlick.add(new Aenderung(n, zustand(neu, falsch), x, y, z));
+					merken(n, neu, falsch);
+				}
+			} else {
+				byte alt = s.gesehen[i];
+				if (neu != alt || (neu == FALSCH && !falsch.equals(s.falschGesehen.get(i)))) {
+					if (neu != bekannt[n] || (neu == FALSCH && !falsch.equals(bekanntFalsch.get(n)))) {
+						live.add(new Aenderung(n, zustand(neu, falsch), x, y, z));
+						merken(n, neu, falsch);
+					}
+				}
 			}
+			s.gesehen[i] = neu;
+			if (neu == FALSCH) s.falschGesehen.put(i, falsch);
+			else s.falschGesehen.remove(i);
 		}
-		int alt = s.falsch.values().stream().mapToInt(List::size).sum();
-		int jetzt = falsch.values().stream().mapToInt(List::size).sum();
-		if (jetzt > alt) ereignis.falsch += jetzt - alt;
+		return true;
 	}
 
-	/** Nimmt geänderte Chunks und Ereignis in die Meldung auf. Klappt das Senden nicht, kommt alles mit {@link #zurueck} wieder rein. */
-	Abgabe abgeben(JsonObject meldung) {
-		List<Stueck> dabei = new ArrayList<>();
-		while (dabei.size() < CHUNKS_JE_MELDUNG && !warteschlange.isEmpty()) {
-			Stueck s = warteschlange.poll();
-			s.offen = false;
-			dabei.add(s);
-		}
-		Ereignis e = ereignis;
-		ereignis = new Ereignis();
-		if (dabei.isEmpty() && e.leer()) return new Abgabe(dabei, e);
-
-		meldung.addProperty("plan_hash", planHash);
-		JsonObject anker = new JsonObject();
-		anker.addProperty("x", ankerX);
-		anker.addProperty("y", ankerY);
-		anker.addProperty("z", ankerZ);
-		meldung.add("anker", anker);
-
-		JsonArray liste = new JsonArray();
-		for (Stueck s : dabei) {
-			JsonObject c = new JsonObject();
-			c.addProperty("cx", s.cx);
-			c.addProperty("cz", s.cz);
-			c.addProperty("n", s.stellen.length);
-			c.addProperty("gebaut", Base64.getEncoder().encodeToString(s.bits));
-			JsonObject falsch = new JsonObject();
-			s.falsch.forEach((block, stellen) -> {
-				JsonArray a = new JsonArray();
-				stellen.forEach(a::add);
-				falsch.add(block, a);
-			});
-			c.add("falsch", falsch);
-			liste.add(c);
-		}
-		meldung.add("chunks", liste);
-
-		if (!e.leer()) {
-			JsonObject o = new JsonObject();
-			o.addProperty("plus", e.plus);
-			o.addProperty("minus", e.minus);
-			o.addProperty("falsch", e.falsch);
-			JsonObject bloecke = new JsonObject();
-			e.bloecke.entrySet().stream()
-				.sorted((a, b) -> b.getValue() - a.getValue())
-				.limit(12)
-				.forEach((x) -> bloecke.addProperty(x.getKey(), x.getValue()));
-			o.add("bloecke", bloecke);
-			meldung.add("ereignis", o);
-		}
-		return new Abgabe(dabei, e);
+	private static Object zustand(byte neu, String falsch) {
+		return neu == FALSCH ? falsch : (int) neu;
 	}
 
-	record Abgabe(List<Stueck> stuecke, Ereignis ereignis) {}
-
-	void zurueck(Abgabe a) {
-		for (Stueck s : a.stuecke()) {
-			if (!s.offen) {
-				s.offen = true;
-				warteschlange.addFirst(s);
-			}
-		}
-		ereignis.plus += a.ereignis().plus;
-		ereignis.minus += a.ereignis().minus;
-		ereignis.falsch += a.ereignis().falsch;
-		a.ereignis().bloecke.forEach((k, v) -> ereignis.bloecke.merge(k, v, Integer::sum));
+	private void merken(int n, byte neu, String falsch) {
+		bekannt[n] = neu;
+		if (neu == FALSCH) bekanntFalsch.put(n, falsch);
+		else bekanntFalsch.remove(n);
 	}
 
-	/** Zahlen für /bruno status */
+	/** Zahlen für /bruno: gesehene Chunks, alle Chunks, gebaut, Planblöcke. */
 	int[] stand() {
 		int gesehen = 0;
-		int bloecke = 0;
+		for (Stueck s : stuecke) if (s.gesehen != null) gesehen++;
 		int gebaut = 0;
-		for (Stueck s : stuecke) {
-			if (s.bits == null) continue;
-			gesehen++;
-			bloecke += s.stellen.length;
-			for (byte b : s.bits) gebaut += Integer.bitCount(b & 0xff);
-		}
-		return new int[] {gesehen, stuecke.length, gebaut, bloecke, warteschlange.size()};
+		for (byte b : bekannt) if (b == GEBAUT) gebaut++;
+		return new int[] {gesehen, stuecke.length, gebaut, bekannt.length};
 	}
 }

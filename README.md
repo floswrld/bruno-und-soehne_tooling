@@ -11,8 +11,8 @@ Läuft komplett auf Cloudflare: ein **Worker** liefert App und API aus, die Date
 - **Zeiterfassung:** Ein- und Ausstempeln, Zeit nachtragen und korrigieren, Wochenansicht. Admins sehen die Zeiten aller Mitarbeiter. Die Fleißrangliste auf der Übersicht sehen alle.
 - **Scrum-Board:** Sprints mit Ziel und Zeitraum, fünf Spalten, Zuständige, Filter nach Mitarbeiter. Die Spalte einer Karte ändert sich nur per Drag & Drop, nicht im Bearbeiten-Dialog. Auf dem Handy: Karte lange drücken, dann ziehen.
 - **Teilaufgaben:** Aufgaben lassen sich in Teilaufgaben zerlegen (eine Ebene). Sie stehen als eigene Karten auf dem Board, laufen im Sprint der übergeordneten Aufgabe mit, und deren Karte zeigt den Fortschritt. Nach „Erledigt“ darf eine Aufgabe erst, wenn alle Teilaufgaben erledigt sind. Wird danach eine Teilaufgabe wieder geöffnet oder neu angelegt, geht die Aufgabe zurück in Arbeit.
-- **Bauplan:** Das Rechenzentrum in 3D (120 × 200 × 40, Dachtechnik ragt darüber hinaus, innen hohl) mit Gelände. Den Innenausbau macht das Team selbst, er steht nicht im Plan. Ebene für Ebene ansehen, Block anklicken für Baustoff und Koordinate, Materialliste mit Stacks und Shulkern. Umschalten zwischen Gesamtbau, schon gebaut und noch offen. Der Plan steht im Code, hochladen kann niemand etwas.
-- **Live vom Minecraft-Server:** Mit der Mod „Bruno Live“ zeigt das Intranet, wer online ist, und baut der Bauplan sich beim Bauen live mit: frische Blöcke leuchten auf, der Fortschritt zählt mit. Siehe unten.
+- **Bauplan:** Das Rechenzentrum in 3D (120 × 200 × 40), nur die äußerste Schicht: Fassade und Dachfläche, ohne Gelände und Dachtechnik. Innen ist es hohl, den Ausbau macht das Team selbst. Ebene für Ebene ansehen, Block anklicken für Baustoff und Koordinate, Materialliste mit Stacks und Shulkern. Umschalten zwischen Gesamtbau, schon gebaut und noch offen. Der Plan steht im Code, hochladen kann niemand etwas.
+- **Live vom Minecraft-Server:** Mit der Mod „Bruno Live“ zeigt das Intranet in Echtzeit, wer online ist und wo jeder gerade steht, als Figur mit seinem Skin. Der Bauplan baut sich beim Bauen sofort mit: frische Blöcke leuchten auf, der Fortschritt zählt mit, die Kamera kann einem Spieler folgen. Siehe unten.
 - **Hell und Dunkel:** Standard ist die Einstellung des Geräts, umschalten per Sonne/Mond-Knopf oder im Profil. Die Wahl liegt nur im Browser. Im Dunkeln ist im Bauplan Nacht, und die Lampen leuchten.
 
 **Sicherheit:** Passwörter als PBKDF2-SHA256 (100.000 Runden, Salt). Sitzungen als HttpOnly-Cookie, in der Datenbank nur als SHA-256-Hash gespeichert. Login-Sperre nach 8 Fehlversuchen in 15 Minuten. Schreibende Anfragen müssen JSON vom eigenen Origin sein (Schutz gegen CSRF). Schriften liegen lokal, es gehen keine Anfragen an Google.
@@ -114,31 +114,38 @@ public/               Die App: index.html, app.js, thema.js, bauplan.js (3D), bl
 public/vendor/three/  three.js (MIT), liegt lokal und wird nur auf der Bauplan-Seite geladen
 public/rechenzentrum.plan.json   Der Bauplan, nur angemeldet abrufbar (eigene Route in src/index.ts)
 src/rechenzentrum.meta.json      Prüfsumme und Blockzahl des Plans für den Worker
-scripts/rechenzentrum/   Der Plan im Code: Raster, Logo, Fassade, Dach, Gelände
+scripts/rechenzentrum/   Der Plan im Code: Raster, Logo, Fassade, Dachfläche
 scripts/              Plan erzeugen (npm run bauplan:plan), mit der Welt abgleichen (npm run bauplan:sync), Mod bauen und testen
 mod/                  Die Fabric-Mod „Bruno Live“ (Java, Gradle). Fertig gebaut in public/downloads/
-src/live.ts           Schnittstellen für Mod und Live-Anzeige
+src/live.ts           Anmeldung für Mod und Live-Anzeige, Skins, Standort
+src/liveraum.ts       Live-Raum (Durable Object): WebSockets von Mods und Browsern, Stand des Baus
+public/figur.js       Spielerfigur mit Skin für die 3D-Ansicht
+public/haut.js        Skins laden, Köpfe für die Listen
 ```
 
 ### Live-Abgleich mit der Mod „Bruno Live“
 
-Aternos erlaubt keine eigenen Server-Mods, darum läuft der Abgleich im Client: eine kleine Fabric-Mod im CurseForge-Profil (Ordner `mod/`, Minecraft 26.3). Sie vergleicht die geladenen Chunks mit dem Plan und meldet alle 10 Sekunden, was sich geändert hat, dazu die Spielerliste und die eigene Position. Die Website fragt auf der Bauplan-Seite alle 5 Sekunden nach, sonst alle 20.
+Aternos erlaubt keine eigenen Server-Mods, darum läuft der Abgleich im Client: eine kleine Fabric-Mod im CurseForge-Profil (Ordner `mod/`, Minecraft 26.3). Mod und Website hängen per WebSocket am **Live-Raum**, einem Durable Object (`src/liveraum.ts`). Nichts wird abgefragt:
+
+- Positionen gehen bis zu zehnmal pro Sekunde raus, mit Blickrichtung und Haltung (schleicht, sprintet, schlägt). Jede Mod meldet auch die Mitspieler in ihrer Sichtweite, auch solche ohne Mod.
+- Ein geänderter Block wird per Mixin im selben Tick erkannt und sofort gemeldet. Wer am nächsten dran stand, bekommt ihn im Feed gutgeschrieben.
+- Skins: echte Skins holt der Worker bei Mojang (`/api/live/haut/<hash>`), Standard-Skins schickt die Mod einmal mit.
 
 Einmalig einrichten:
 
-1. `npm run db:remote` und deployen.
-2. Als Geschäftsführung im Bauplan unter **Live → Standort und Server** die Server-Adresse und die Nordwest-Ecke des Gebäudes eintragen. Ohne Adresse meldet die Mod gar nichts, ohne Standort nur, wer online ist.
-3. Jeder Mitspieler folgt der Anleitung im Profil: Mod herunterladen, Zugangsdatei erzeugen, beides in den Profilordner legen.
+1. Deployen. Der Live-Raum wird dabei angelegt (Migration in `wrangler.jsonc`), Standort und Server von früher übernimmt er einmal aus D1.
+2. Standort einmessen: Es zählt genau ein Block, der unterste an der Nordwest-Ecke (Plan x 0 · y 0 · z 0, schwarzer Beton). Den Block in der Welt setzen und als Geschäftsführung im Spiel draufschauen und `/bruno ecke` tippen. Das setzt Standort und Server auf einmal. Alternativ im Bauplan unter **Live → Standort und Server** eintragen, dort zeigt „Ecke im Modell zeigen“ den Block.
+3. Jeder Mitspieler folgt der Anleitung im Profil: Mod herunterladen (Version 2, die alte vorher löschen), Zugangsdatei erzeugen, beides in den Profilordner legen.
 
-So bleibt es harmlos: Die Mod meldet nur auf dem eingestellten Server und nur in der Oberwelt Blöcke. Jeder hat einen eigenen Schlüssel, der nur `/api/mc/*` darf und sich im Profil widerrufen lässt. Sie sieht nur, was der Client ohnehin kennt: Was gerade niemand mit Mod in Sichtweite hat, bleibt auf dem letzten Stand. Ohne Spieler mit Mod gibt es keine Daten, der Datei-Abgleich (`npm run bauplan:sync`) ergänzt das und lässt sich weiter nutzen.
+So bleibt es harmlos: Die Mod meldet nur auf dem eingestellten Server und nur in der Oberwelt Blöcke. Jeder hat einen eigenen Schlüssel, der nur `/api/mc/*` darf und sich im Profil widerrufen lässt. Sie sieht nur, was der Client ohnehin kennt: Was gerade niemand mit Mod in Sichtweite hat, bleibt auf dem letzten Stand. Beim ersten Blick auf einen Chunk meldet sie nur, was vom bekannten Stand abweicht.
 
-Gespeichert wird je Chunk, nicht je Block, und unveränderte Chunks schreiben nichts. So bleibt es selbst bei fünf gleichzeitig bauenden Spielern unter dem Gratis-Limit von D1 (100.000 geschriebene Zeilen am Tag).
+Gratis-Tarif: Der Live-Raum speichert den Stand gesammelt alle zwei Sekunden (eine Zeile), Positionen gar nicht. Eingehende WebSocket-Nachrichten zählen nur zu einem Zwanzigstel als Anfrage. Eine Mod schickt höchstens zehn Positionen pro Sekunde und nur, solange sich etwas bewegt: Fünf Spieler, die drei Stunden am Stück herumlaufen, ergeben rund 27.000 Anfragen, das Limit liegt bei 100.000 am Tag. Ein Browser mit offenem Bauplan kostet nichts extra.
 
 Die Mod bauen (JDK 25 in `JAVA_HOME`): `npm run mod:bauen` legt sie nach `public/downloads/bruno-live.jar`. Echter Test mit dem Spiel gegen das lokale Intranet: `npm run lokal`, dann in einem zweiten Terminal `npm run mod:test`. Dabei öffnet sich kurz ein Spielfenster, in dem ein Testserver läuft. Fenster offen lassen, es schließt sich selbst. Zum Ausprobieren im Einzelspieler `"einzelspieler": true` in `config/bruno-live.json` ergänzen.
 
 ### Den Bauplan ändern
 
-Plan neu erzeugen: `npm run bauplan:plan`. Beim Erzeugen prüft das Skript: Gebäudemaße, unbekannte Block-IDs, kein Logo auf dem Dach, kein Kupfer, Innenraum frei und keine dunklen Flächen auf dem Dach (es rechnet das Licht wie das Spiel und ergänzt fehlende Leuchten selbst).
+Plan neu erzeugen: `npm run bauplan:plan`. Die Fassade wird erst drei Blöcke tief entworfen (zurückgesetzte Fenster, Fugen), danach bleibt nur, was von außen zu sehen ist. Beim Erzeugen prüft das Skript: Gebäudemaße, unbekannte Block-IDs, kein Logo auf dem Dach, kein Kupfer, Innenraum frei, der Ankerblock steht und keine dunklen Flächen auf Dach und Attika (es rechnet das Licht wie das Spiel und setzt fehlende Leuchten bündig in die Fläche).
 
 ### Bauplan mit der Welt abgleichen
 
@@ -146,9 +153,8 @@ Der Abgleich liest eine Kopie der Minecraft-Welt und meldet, welche Blöcke des 
 
 Einmalig einrichten:
 
-1. Die Tabelle anlegen, noch vor dem Deploy: `npm run db:remote`.
-2. Einen langen Zufallswert als Schlüssel setzen: `npx wrangler secret put BAUPLAN_SYNC_KEY`.
-3. In `scripts/gen-rechenzentrum.mjs` bei `ANKER` die Welt-Koordinate der unteren Nord-West-Ecke des Gebäudes eintragen, `npm run bauplan:plan` ausführen und deployen.
+1. Einen langen Zufallswert als Schlüssel setzen: `npx wrangler secret put BAUPLAN_SYNC_KEY`.
+2. Beim Melden mit `--anker x,y,z` den eingemessenen Ankerblock angeben (oder in `scripts/gen-rechenzentrum.mjs` bei `ANKER` eintragen, `npm run bauplan:plan` ausführen und deployen).
 
 Danach bei jedem Abgleich die Welt bei Aternos herunterladen (Server vorher stoppen, damit alles gespeichert ist) und melden:
 
@@ -156,7 +162,7 @@ Danach bei jedem Abgleich die Welt bei Aternos herunterladen (Server vorher stop
 BAUPLAN_SYNC_KEY=... npm run bauplan:sync -- pfad/zur/world.zip --url https://deine-adresse
 ```
 
-Mit `--nur-pruefen` statt `--url` wird nur das Ergebnis angezeigt und nichts gemeldet. Wird der Plan geändert, zählt der alte Abgleich nicht mehr und muss neu laufen.
+Das Ergebnis ersetzt den Stand im Live-Raum und erscheint sofort auf allen offenen Bauplan-Seiten. Mit `--nur-pruefen` statt `--url` wird nur das Ergebnis angezeigt und nichts gemeldet. Wird der Plan geändert, zählt der alte Abgleich nicht mehr und muss neu laufen.
 
 Das Frontend kommt ohne Build-Schritt aus: einfaches JavaScript, direkt im Browser. Neue Datenbank-Änderungen kommen als weitere Datei in `migrations/` (z. B. `0002_bauplan.sql`) und werden mit `npm run db:remote` eingespielt.
 

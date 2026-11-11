@@ -5,7 +5,7 @@ import { HttpError, fail, str, int } from './util';
 import { listTasks, createTask, updateTask } from './tasks';
 import { MCP_KEY_PREFIX } from './mcp';
 import { oauthFor, authorizePage, authorizeDecision, listConnections, revokeConnection } from './oauth';
-import { liveChunks, liveEinstellung, liveRoutes } from './live';
+import { liveRaum, liveRoutes } from './live';
 import plan from './rechenzentrum.meta.json';
 import type { Env, User } from './types';
 
@@ -526,20 +526,7 @@ app.delete('/api/tasks/:id', async (c) => {
 
 // ---------- Bauplan ----------
 
-app.get('/api/bauplan', auth, async (c) => {
-  const row = await c.env.DB.prepare('SELECT plan_hash, gebaut, gebaut_anzahl, falsch, gescannt_am FROM bauplan_fortschritt WHERE id = 1').first<{
-    plan_hash: string;
-    gebaut: string;
-    gebaut_anzahl: number;
-    falsch: string;
-    gescannt_am: string;
-  }>();
-  // Ein Abgleich gegen einen älteren Plan passt nicht mehr zu den Blocknummern.
-  const fortschritt = row?.plan_hash === plan.hash ? { ...row, falsch: JSON.parse(row.falsch) } : null;
-  const jetzt = Date.now();
-  const [einstellung, chunks] = await Promise.all([liveEinstellung(c.env.DB), liveChunks(c.env.DB, 0)]);
-  return c.json({ plan_hash: plan.hash, fortschritt, anker: einstellung.anker, server: einstellung.server, live: { jetzt, chunks } });
-});
+app.get('/api/bauplan', auth, async (c) => c.json(await liveRaum(c.env).schnappschuss()));
 
 // Meldung des Abgleichs (scripts/bauplan-sync.mjs). Kein Cookie, sondern ein eigener Schlüssel.
 app.post('/api/bauplan/fortschritt', async (c) => {
@@ -558,13 +545,8 @@ app.post('/api/bauplan/fortschritt', async (c) => {
     falsch !== null &&
     Object.values(falsch).every((l) => Array.isArray(l) && l.every((n) => Number.isInteger(n) && n >= 0 && n < plan.gesamt));
   if (!gueltig) fail(400, 'Die Liste der falschen Blöcke passt nicht zum Plan.');
-  await c.env.DB.prepare(
-    `INSERT INTO bauplan_fortschritt (id, plan_hash, gebaut, gebaut_anzahl, falsch, gescannt_am) VALUES (1, ?, ?, ?, ?, ?)
-     ON CONFLICT (id) DO UPDATE SET plan_hash = excluded.plan_hash, gebaut = excluded.gebaut, gebaut_anzahl = excluded.gebaut_anzahl,
-       falsch = excluded.falsch, gescannt_am = excluded.gescannt_am`
-  )
-    .bind(plan.hash, b.gebaut, anzahl, JSON.stringify(falsch), new Date().toISOString())
-    .run();
+  // Der Live-Raum übernimmt den ganzen Stand und schickt ihn sofort an alle offenen Seiten und Mods.
+  await liveRaum(c.env).vollerStand(b.gebaut as string, falsch as Record<string, number[]>);
   return c.json({ ok: true });
 });
 
@@ -602,3 +584,4 @@ app.get('/rechenzentrum.plan.json', auth, (c) => c.env.ASSETS.fetch(c.req.raw));
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default app;
+export { LiveRaum } from './liveraum';
