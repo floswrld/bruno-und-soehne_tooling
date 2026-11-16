@@ -3,7 +3,7 @@
   "id": "bruno-live",
   "version": "${version}",
   "name": "Bruno Live",
-  "description": "Zeigt im Bruno & Söhne Intranet live, wer auf dem Server ist, wo er steht (mit Skin) und welche Blöcke des Bauplans stehen. Meldet nur auf dem eingestellten Server.",
+  "description": "Zeigt im Bruno & Söhne Intranet live, wer auf dem Server ist, wo er steht (mit Skin), welche Blöcke des Bauplans stehen und was im Gebäude steht, bis 40 Blöcke unter den Boden. Meldet nur auf dem eingestellten Server.",
   "authors": ["Bruno & Söhne GmbH"],
   "license": "All-Rights-Reserved",
   "environment": "client",

@@ -272,8 +272,11 @@ function liveZeigen(d) {
   if (d) $$('[data-live-liste]').forEach((el) => liveListeFuellen(el, d));
 }
 
+// true, wenn die Nachricht raus ist
 function liveSenden(nachricht) {
-  if (live.ws?.readyState === WebSocket.OPEN) live.ws.send(typeof nachricht === 'string' ? nachricht : JSON.stringify(nachricht));
+  if (live.ws?.readyState !== WebSocket.OPEN) return false;
+  live.ws.send(typeof nachricht === 'string' ? nachricht : JSON.stringify(nachricht));
+  return true;
 }
 
 function liveVerbinden() {
@@ -1213,7 +1216,7 @@ async function viewPlan(main) {
   main.classList.add('breit');
   const istAdmin = state.me.role === 'admin';
   main.innerHTML = `
-    <header class="page-head"><div><h1>Bauplan</h1><p>Das Rechenzentrum, Block für Block: ${plan.gebaeude.breite} × ${plan.gebaeude.tiefe} × ${plan.gebaeude.hoehe}, nur die äußerste Schicht. Innen ist frei, den Ausbau machen wir selbst. Alles hier läuft live mit.</p></div></header>
+    <header class="page-head"><div><h1>Bauplan</h1><p>Das Rechenzentrum, Block für Block: ${plan.gebaeude.breite} × ${plan.gebaeude.tiefe} × ${plan.gebaeude.hoehe}, die Außenhaut nach Plan. Was innen steht, bis ${start.innen?.tiefe ?? 40} Blöcke unter den Boden, kommt live aus der Welt. Alles hier läuft live mit.</p></div></header>
     <div data-bauplan></div>`;
   const ansicht = modul.zeigeBauplan(
     $('[data-bauplan]', main),
@@ -1222,6 +1225,7 @@ async function viewPlan(main) {
       start,
       istAdmin,
       toast,
+      senden: liveSenden,
       speichern: async (werte) => {
         await api('PUT', '/bauplan/einstellung', werte);
         toast('Gespeichert.');
@@ -1505,7 +1509,7 @@ async function modPanelZeigen(el) {
     <p class="small muted" style="margin:0 0 12px">Bruno Live zeigt hier im Intranet live, wer auf dem Server ist, wo er gerade steht (mit Skin) und welche Blöcke des Bauplans stehen. Sie meldet nur auf unserem Server: deinen Namen, deine Position, die Spielerliste mit Skins, wo Mitspieler in deiner Sichtweite stehen und welche Plan-Blöcke du siehst. Sonst nichts.</p>
     <ol class="mod-schritte">
       <li>In der CurseForge-App beim Profil (Minecraft 26.3, Fabric) über das <b>⋯</b>-Menü <b>Open Folder</b> wählen.</li>
-      <li><a class="btn btn-ghost btn-sm" href="/downloads/bruno-live.jar" download>Mod herunterladen</a> (Version 2) und in den Ordner <code>mods</code> legen, nicht ins CurseForge-Fenster ziehen. Eine ältere bruno-live.jar dort löschen. Fabric API muss im Profil sein.</li>
+      <li><a class="btn btn-ghost btn-sm" href="/downloads/bruno-live.jar" download>Mod herunterladen</a> (Version 2.1) und in den Ordner <code>mods</code> legen, nicht ins CurseForge-Fenster ziehen. Eine ältere bruno-live.jar dort löschen. Fabric API muss im Profil sein.</li>
       <li><button type="button" class="btn btn-brass btn-sm" data-mod-key>${key ? 'Neue Datei erzeugen' : 'Zugangsdatei erzeugen'}</button> und nach <code>config</code> legen. ${key ? 'Der alte Schlüssel gilt dann nicht mehr.' : ''}</li>
       <li>Minecraft starten und auf den Server gehen. Im Chat steht „Bruno Live: verbunden“. <code>/bruno</code> zeigt jederzeit den Stand.${state.me.role === 'admin' ? ' Den Standort legst du im Spiel fest: auf den Eckblock schauen und <code>/bruno ecke</code> tippen.' : ''}</li>
     </ol>

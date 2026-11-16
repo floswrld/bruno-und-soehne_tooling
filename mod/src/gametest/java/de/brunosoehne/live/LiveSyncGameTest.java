@@ -77,6 +77,11 @@ public class LiveSyncGameTest implements FabricClientGameTest {
 			server.runCommand("fill -60 113 -70 -60 113 -66 minecraft:stone");
 			server.runCommand("fill -60 114 -70 -60 116 -66 minecraft:white_concrete_powder");
 			kontext.waitTicks(4 * SEKUNDE);
+			// Innenraum: Was im Gebäude steht, kommt ohne Plan durch, auch 30 Blöcke unter dem Boden (Anker-y 100).
+			zeit("innen");
+			server.runCommand("fill -40 105 -45 -38 107 -43 minecraft:oak_planks");
+			server.runCommand("setblock -40 70 -45 minecraft:gold_block");
+			kontext.waitTicks(4 * SEKUNDE);
 			zeit("ende");
 		}
 	}

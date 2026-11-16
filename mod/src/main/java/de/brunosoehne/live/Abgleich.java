@@ -45,6 +45,9 @@ final class Abgleich {
 	/** Der Plan, fertig zerlegt. Ohne Spielzustand, wird im Netz-Thread gebaut und zwischen Sitzungen behalten. */
 	static final class Plan {
 		final String hash;
+		final int gx; // Größe des Planrasters
+		final int gy;
+		final int gz;
 		final int gebX;
 		final int gebY;
 		final int gebZ;
@@ -52,8 +55,11 @@ final class Abgleich {
 		final int[] stelle; // je Nummer: x | z << 10 | y << 20 im Planraster
 		final short[] soll; // je Nummer: Index in namen
 
-		private Plan(String hash, int gebX, int gebY, int gebZ, String[] namen, int[] stelle, short[] soll) {
+		private Plan(String hash, int gx, int gy, int gz, int gebX, int gebY, int gebZ, String[] namen, int[] stelle, short[] soll) {
 			this.hash = hash;
+			this.gx = gx;
+			this.gy = gy;
+			this.gz = gz;
 			this.gebX = gebX;
 			this.gebY = gebY;
 			this.gebZ = gebZ;
@@ -115,7 +121,7 @@ final class Abgleich {
 				if (zelle != gx * gz) throw new IllegalStateException("Ebene " + y + " hat die falsche Länge.");
 			}
 			if (n != gesamt) throw new IllegalStateException("Blockzahl passt nicht: " + n + " statt " + gesamt);
-			return new Plan(plan.get("hash").getAsString(), gebaeude.get("x").getAsInt(), gebaeude.get("y").getAsInt(), gebaeude.get("z").getAsInt(), namen.toArray(new String[0]), stelle, soll);
+			return new Plan(plan.get("hash").getAsString(), gx, ebenen.size(), gz, gebaeude.get("x").getAsInt(), gebaeude.get("y").getAsInt(), gebaeude.get("z").getAsInt(), namen.toArray(new String[0]), stelle, soll);
 		}
 	}
 
