@@ -172,3 +172,83 @@ export const BLOECKE = {
   'minecraft:tinted_glass': b('Getöntes Glas', 0x2c2732, 'glas'),
   'minecraft:glass_pane': b('Glasscheibe', 0xc9e4ec, 'glas'),
 };
+
+// ---------- Alles andere ----------
+// Im Innenraum kommt jeder Block vor, den es im Spiel gibt. Was oben nicht steht, bekommt Farbe und Muster aus dem
+// Namen geraten. Der Name bleibt der englische aus dem Spiel.
+
+const HOLZ = {
+  dark_oak: [0x45301a, 0x2d5a1e], pale_oak: [0xe0d6d2, 0x9aa38f], oak: [0xa2824f, 0x4f7c2c], spruce: [0x6e4f2d, 0x35552e],
+  birch: [0xc4b27b, 0x7ba152], jungle: [0xa0734d, 0x3f8a2a], acacia: [0xad5d32, 0x5a8a2a], mangrove: [0x763631, 0x4d7a2a],
+  cherry: [0xe3b3ad, 0xe8a5c5], bamboo: [0xc2ad52, 0x5e8a1e], crimson: [0x6a344b, 0x8a1d1d], warped: [0x2b6963, 0x167e86],
+};
+const ERZ = { coal: 0x3a3a3a, iron: 0xd8af93, copper: 0xc36f4a, gold: 0xf5d33e, redstone: 0xc0201a, lapis: 0x2a5ab5, diamond: 0x5fe0d8, emerald: 0x2fc46d, quartz: 0xe8e0d6 };
+// Erster Treffer zählt, darum das Genauere zuerst.
+const STOFFE = [
+  [/blackstone/, 0x2a262c, 'stein'], [/deepslate/, 0x505053, 'stein'], [/cobble/, 0x7a7a7a, 'bruch'], [/granite/, 0x9a6b57, 'stein'],
+  [/diorite/, 0xbdbdbd, 'stein'], [/andesite/, 0x888889, 'stein'], [/tuff/, 0x6c6d66, 'stein'], [/calcite/, 0xdfe0dc, 'stein'],
+  [/dripstone/, 0x866b5c, 'stein'], [/basalt/, 0x4f4e54, 'stein'], [/bedrock/, 0x3a3a3a, 'bruch'], [/end_stone/, 0xdbdea2, 'stein'],
+  [/nether_brick/, 0x2e171b, 'ziegel'], [/netherrack/, 0x6f3535, 'stein'], [/quartz/, 0xece6df, 'glatt'], [/prismarine/, 0x5fa59a, 'stein'],
+  [/purpur/, 0xa97ba9, 'kacheln'], [/red_sandstone/, 0xb5621f, 'glatt'], [/sandstone/, 0xd8cb9b, 'glatt'], [/red_sand/, 0xbe6621, 'kies'],
+  [/sand/, 0xdbcfa3, 'kies'], [/gravel/, 0x837f7e, 'kies'], [/clay/, 0xa0a6b3, 'glatt'], [/mud_brick/, 0x8a6a4f, 'ziegel'],
+  [/^mud$|muddy/, 0x3c3837, 'erde'], [/dirt|farmland|rooted/, 0x86603f, 'erde'], [/grass_block|moss/, 0x6a9a46, 'gras'], [/mycelium/, 0x6f6265, 'erde'],
+  [/podzol/, 0x5b3d1d, 'erde'], [/snow/, 0xf9fefe, 'glatt'], [/ice/, 0x91b4f5, 'glatt'], [/obsidian/, 0x100c1c, 'poliert'],
+  [/netherite/, 0x433e42, 'metall'], [/amethyst/, 0x8f67c8, 'kupfer'], [/oxidized/, 0x4f9b83, 'kupfer'], [/weathered/, 0x6c9b6f, 'kupfer'],
+  [/exposed/, 0xa38064, 'kupfer'], [/copper/, 0xc26a4d, 'kupfer'], [/iron/, 0xc8c9ca, 'metall'], [/gold/, 0xf5d33e, 'metall'],
+  [/diamond/, 0x62dbd5, 'metall'], [/emerald/, 0x37c46d, 'metall'], [/lapis/, 0x2a5ab5, 'metall'], [/redstone/, 0xa31a09, 'metall'],
+  [/coal/, 0x131313, 'stein'], [/sculk/, 0x0f2a33, 'stein'], [/sponge/, 0xc8bf4a, 'kies'], [/bone_block/, 0xe1ddc9, 'glatt'],
+  [/hay/, 0xa68a0d, 'holz'], [/melon/, 0x6f9a2a, 'kasten'], [/pumpkin/, 0xc36f0e, 'holz'], [/brick/, 0x96614f, 'ziegel'],
+  [/chest|barrel/, 0x9b6e30, 'truhe'], [/bookshelf/, 0x6c4a26, 'regal'], [/crafting_table|loom|fletching|cartography|lectern|composter|note_block|jukebox/, 0x8c6438, 'holz'],
+  [/furnace|smoker|dispenser|dropper|observer|crafter|piston|stonecutter|grindstone/, 0x6f6f70, 'kasten'],
+  [/glass/, 0xc9e4ec, 'glas'], [/water|bubble_column/, 0x2f6fc4, 'glatt'], [/stone/, 0x7e7e7e, 'stein'],
+];
+const PFLANZE = /grass|fern|flower|tulip|orchid|allium|bluet|daisy|poppy|dandelion|rose|peony|lilac|bush|sapling|vine|kelp|seagrass|lichen|roots|dripleaf|azalea|petals|sprouts|wheat|carrots|potatoes|beetroots|berr|cane|cactus|bamboo|lily|spore|torchflower|pitcher|eyeblossom|wart|litter/;
+const LICHTER = /torch|lantern|glowstone|shroomlight|froglight|jack_o_lantern|beacon|end_rod|^fire$|soul_fire|^lava$|campfire|conduit|respawn_anchor|crying_obsidian|glow_lichen|magma|copper_bulb|lit_/;
+
+const farbname = new RegExp(`^(${Object.keys(FARBEN).sort((a, c) => c.length - a.length).join('|')})_`);
+const holzname = new RegExp(`^(?:stripped_)?(${Object.keys(HOLZ).join('|')})_`);
+const mischen = (a, c, t) => {
+  const k = (s) => Math.round(((a >> s) & 255) * (1 - t) + ((c >> s) & 255) * t) << s;
+  return k(16) | k(8) | k(0);
+};
+
+function raten(id) {
+  const farbe = farbname.exec(id);
+  if (farbe) {
+    const [, beton, wolle] = FARBEN[farbe[1]];
+    if (/glazed_terracotta$/.test(id)) return [wolle, 'kacheln'];
+    if (/terracotta$/.test(id)) return [mischen(beton, 0x985e43, 0.45), 'beton'];
+    if (/concrete_powder$/.test(id)) return [mischen(beton, 0xffffff, 0.15), 'kies'];
+    if (/concrete$/.test(id)) return [beton, 'beton'];
+    if (/glass/.test(id)) return [wolle, 'glas'];
+    return [wolle, /shulker/.test(id) ? 'kasten' : 'wolle'];
+  }
+  const holz = holzname.exec(id);
+  if (holz) {
+    const [brett, laub] = HOLZ[holz[1]];
+    if (/leaves$/.test(id)) return [laub, 'blatt'];
+    if (/sapling$|propagule$/.test(id)) return [laub, 'pflanze'];
+    if (/(_log|_wood|_stem|_hyphae)$/.test(id)) return [id.startsWith('stripped_') ? brett : mischen(brett, 0x2a1d10, 0.45), 'stamm'];
+    return [brett, 'holz'];
+  }
+  const erz = /^(?:deepslate_|nether_)?(\w+?)_ore$/.exec(id);
+  if (erz) return [mischen(id.startsWith('deepslate_') ? 0x505053 : id.startsWith('nether_') ? 0x6f3535 : 0x7e7e7e, ERZ[erz[1]] ?? 0x888888, 0.3), 'stein'];
+  if (/mushroom|fungus/.test(id)) return [/red|crimson/.test(id) ? 0xc0302c : 0x9a7353, /block|stem/.test(id) ? 'kasten' : 'pflanze'];
+  if (PFLANZE.test(id)) return [0x5e8f3a, 'pflanze'];
+  for (const [muster, farbeStoff, art] of STOFFE) if (muster.test(id)) return [farbeStoff, art];
+  return [0x8a8a8a, 'beton'];
+}
+
+const geraten = new Map();
+// Baustoff für jeden Block: aus der Liste oben oder geraten.
+export function baustoff(block) {
+  const da = BLOECKE[block] ?? geraten.get(block);
+  if (da) return da;
+  const id = block.replace(/^minecraft:/, '');
+  const [farbe, muster] = raten(id);
+  const licht = LICHTER.test(id) ? (/magma|crying|lichen/.test(id) ? 0.35 : 1) : 0;
+  const lichtFarbe = /soul/.test(id) ? 0x4fd2d6 : /redstone/.test(id) ? 0xd23a1f : /lava|fire|magma|campfire|shroomlight/.test(id) ? 0xe87a1c : /froglight|lichen/.test(id) ? 0xb9e38f : /crying/.test(id) ? 0x3a1a6a : 0xf2c25b;
+  const e = licht ? b(id.replaceAll('_', ' '), lichtFarbe, 'lampe', { leuchtet: licht }) : b(id.replaceAll('_', ' '), farbe, muster);
+  geraten.set(block, e);
+  return e;
+}

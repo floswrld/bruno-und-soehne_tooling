@@ -46,7 +46,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Bruno Live: zeigt im Intranet live, wer auf dem Server ist, wo er steht und welche Blöcke des Bauplans stehen.
+ * Bruno Live: zeigt im Intranet live, wer auf dem Server ist, wo er steht, welche Blöcke des Bauplans stehen und was
+ * im Gebäude steht (Innenraum, bis 40 Blöcke unter den Boden).
  *
  * <p>Eine WebSocket-Leitung zum Live-Raum des Intranets. Positionen gehen bis zu zehnmal pro Sekunde raus, gesetzte
  * Blöcke im selben Tick, in dem das Spiel sie anzeigt. Meldet nur auf dem Server, der im Intranet eingestellt ist.
@@ -82,6 +83,7 @@ public final class BrunoLive implements ClientModInitializer {
 	private boolean aktiv;
 	private boolean begruesst;
 	private Abgleich abgleich;
+	private Innenraum innenraum;
 	private Abgleich.Plan planCache;
 	private String status = "Noch nicht verbunden.";
 	private int ticks;
@@ -98,7 +100,9 @@ public final class BrunoLive implements ClientModInitializer {
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, mc) -> sitzungBeenden());
 		ClientTickEvents.END_CLIENT_TICK.register(this::tick);
 		ClientChunkEvents.CHUNK_LOAD.register((welt, chunk) -> {
-			if (abgleich != null && welt.dimension() == Level.OVERWORLD) abgleich.chunkGeladen(chunk.getPos().x(), chunk.getPos().z());
+			if (welt.dimension() != Level.OVERWORLD) return;
+			if (abgleich != null) abgleich.chunkGeladen(chunk.getPos().x(), chunk.getPos().z());
+			if (innenraum != null) innenraum.chunkGeladen(chunk.getPos().x(), chunk.getPos().z());
 		});
 		ClientChunkEvents.CHUNK_UNLOAD.register((welt, chunk) -> {
 			if (abgleich != null && welt.dimension() == Level.OVERWORLD) abgleich.chunkEntladen(chunk.getPos().x(), chunk.getPos().z());
@@ -121,6 +125,7 @@ public final class BrunoLive implements ClientModInitializer {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.level == null || mc.level.dimension() != Level.OVERWORLD) return;
 		b.abgleich.blockGeaendert(pos.getX(), pos.getZ());
+		if (b.innenraum != null) b.innenraum.blockGeaendert(pos.getX(), pos.getY(), pos.getZ());
 	}
 
 	private static Path konfigDatei() {
@@ -157,6 +162,7 @@ public final class BrunoLive implements ClientModInitializer {
 		verbindet = false;
 		aktiv = false;
 		abgleich = null;
+		innenraum = null;
 		begruesst = false;
 		eingang.clear();
 		status = "Nicht verbunden.";
@@ -210,6 +216,7 @@ public final class BrunoLive implements ClientModInitializer {
 			leitung = null;
 			aktiv = false;
 			abgleich = null;
+			innenraum = null;
 			eingang.clear();
 			neuVersuchen(grund + ".");
 		}
@@ -221,6 +228,7 @@ public final class BrunoLive implements ClientModInitializer {
 		if (ticks % TICKS_POS == 0) positionSenden(mc);
 		if (ticks % TICKS_TAB == 0) tabSenden(mc);
 		if (abgleich != null && mc.level.dimension() == Level.OVERWORLD) bloeckeAbgleichen(mc);
+		if (innenraum != null && mc.level.dimension() == Level.OVERWORLD) innenAbgleichen(mc);
 	}
 
 	private void behandeln(Minecraft mc, JsonObject m) {
@@ -228,6 +236,9 @@ public final class BrunoLive implements ClientModInitializer {
 			case "start" -> start(mc, m);
 			case "bloecke" -> {
 				if (abgleich != null) abgleich.bekanntAendern(m.getAsJsonArray("liste"));
+			}
+			case "innen-h" -> {
+				if (innenraum != null) innenraum.bekanntAendern(m.getAsJsonArray("liste"));
 			}
 			case "meldung" -> chat(mc, m.get("text").getAsString());
 			default -> {}
@@ -245,6 +256,7 @@ public final class BrunoLive implements ClientModInitializer {
 		fehlversuche = 0;
 		aktiv = false;
 		abgleich = null;
+		innenraum = null;
 		startNummer++;
 		if (!passt) {
 			if (eingestellt.isBlank() && !mc.hasSingleplayerServer()) {
@@ -287,8 +299,10 @@ public final class BrunoLive implements ClientModInitializer {
 		String hash = m.get("hash").getAsString();
 		String gebaut = m.get("gebaut").getAsString();
 		JsonArray falsch = m.getAsJsonArray("falsch");
+		// Ältere Intranets kennen den Innenraum noch nicht: Dann bleibt es beim Plan.
+		JsonObject innen = m.has("innen") && m.get("innen").isJsonObject() ? m.getAsJsonObject("innen") : null;
 		if (planCache != null && planCache.hash.equals(hash)) {
-			abgleichStarten(planCache, ax, ay, az, gebaut, falsch);
+			abgleichStarten(planCache, ax, ay, az, gebaut, falsch, innen);
 			return;
 		}
 		status = "Lade den Bauplan …";
@@ -305,7 +319,7 @@ public final class BrunoLive implements ClientModInitializer {
 						return;
 					}
 					planCache = p;
-					abgleichStarten(p, ax, ay, az, gebaut, falsch);
+					abgleichStarten(p, ax, ay, az, gebaut, falsch, innen);
 				});
 			} catch (Exception ex) {
 				LOG.warn("Bauplan nicht geladen", ex);
@@ -316,9 +330,13 @@ public final class BrunoLive implements ClientModInitializer {
 		});
 	}
 
-	private void abgleichStarten(Abgleich.Plan p, int ax, int ay, int az, String gebaut, JsonArray falsch) {
+	private void abgleichStarten(Abgleich.Plan p, int ax, int ay, int az, String gebaut, JsonArray falsch, JsonObject innen) {
 		abgleich = new Abgleich(p, ax, ay, az);
 		abgleich.bekanntSetzen(gebaut, falsch);
+		if (innen != null && innen.has("tiefe")) {
+			int tiefe = Math.max(0, Math.min(64, innen.get("tiefe").getAsInt()));
+			innenraum = new Innenraum(p, ax, ay, az, tiefe, innen.has("h") && innen.get("h").isJsonObject() ? innen.getAsJsonObject("h") : null);
+		}
 		status = "Aktiv.";
 		LOG.info("Live-Abgleich aktiv, Ecke bei {} / {} / {}.", ax, ay, az);
 	}
@@ -455,6 +473,26 @@ public final class BrunoLive implements ClientModInitializer {
 		}
 	}
 
+	/** Innenraum: jedes geänderte Stück als eigene Nachricht. Ein Stück kann groß sein, so bleibt jede unter dem Limit. */
+	private void innenAbgleichen(Minecraft mc) {
+		List<JsonObject> raus = new ArrayList<>();
+		innenraum.tick(mc.level, raus);
+		for (JsonObject stueck : raus) {
+			JsonObject m = new JsonObject();
+			m.addProperty("t", "innen");
+			m.addProperty("hash", abgleich.plan.hash);
+			JsonObject a = new JsonObject();
+			a.addProperty("x", abgleich.ankerX);
+			a.addProperty("y", abgleich.ankerY);
+			a.addProperty("z", abgleich.ankerZ);
+			m.add("anker", a);
+			JsonArray liste = new JsonArray();
+			liste.add(stueck);
+			m.add("stuecke", liste);
+			leitung.senden(m, true);
+		}
+	}
+
 	/** Wer hat's gebaut? Der Spieler, der am nächsten dran ist, wenn er in Reichweite war. */
 	private static String naechster(List<AbstractClientPlayer> spieler, Abgleich.Aenderung e) {
 		String name = null;
@@ -519,6 +557,10 @@ public final class BrunoLive implements ClientModInitializer {
 		if (abgleich == null) return status;
 		int[] s = abgleich.stand();
 		String text = status + " Chunks gesehen: " + s[0] + " von " + s[1] + ". Gebaut: " + s[2] + " von " + s[3] + " Blöcken.";
+		if (innenraum != null) {
+			int[] i = innenraum.stand();
+			text += " Innenraum: " + i[0] + " von " + i[1] + " Chunks gesehen.";
+		}
 		if (abgleich.unbekannteBloecke > 0) text += " " + abgleich.unbekannteBloecke + " Blockarten im Plan gibt es in dieser Version nicht, siehe Log.";
 		return text;
 	}

@@ -100,12 +100,14 @@ let faelschlich = 0;
 let falschRichtig = 0;
 let pulverSoll = 0;
 let pulverGebaut = 0;
+const planZellen = new Set();
 plan.layers.forEach((schicht, y) => {
   let i = 0;
   for (const [, n, c] of schicht.matchAll(/(\d+)(\D)/g)) {
     if (c !== '.') {
       for (let k = 0; k < Number(n); k++, nummer++) {
         const q = i + k;
+        planZellen.add(`${q % X},${y},${Math.floor(q / X)}`);
         const wx = ANKER.x - plan.gebaeude.x + (q % X);
         const wz = ANKER.z - plan.gebaeude.z + Math.floor(q / X);
         const wy = ANKER.y - plan.gebaeude.y + y;
@@ -130,4 +132,53 @@ melde('Gebaut steht an den richtigen Stellen', richtig > 0, `${richtig} Blöcke`
 melde('Nichts steht fälschlich als gebaut da', faelschlich === 0, faelschlich);
 melde('Falsch gesetzte Blöcke erkannt', falschRichtig > 0, falschRichtig);
 melde('Betonpulver zählt als Beton', pulverSoll > 0 && pulverGebaut === pulverSoll, `${pulverGebaut} von ${pulverSoll}`);
+
+// ---------- Innenraum ----------
+// Holz bei Welt -40..-38 / 105..107 / -45..-43 ist Plan 20..22 / 5..7 / 55..57, Gold bei -40 / 70 / -45 ist Plan 20 / -30 / 55.
+const tiefe = stand.innen?.tiefe ?? 0;
+melde('Live-Raum kennt den Innenraum', tiefe > 0, `${tiefe} Blöcke tief`);
+function stueckLesen(s, ziel) {
+  const [x0, z0, b, t] = s.k;
+  let q = 0;
+  for (let j = 0; j < s.r.length; j += 2) {
+    const block = s.r[j + 1] ? s.p[s.r[j + 1] - 1] : null;
+    for (let k = 0; k < s.r[j]; k++, q++) {
+      if (!block) continue;
+      const ebene = Math.floor(q / (b * t));
+      const rest = q % (b * t);
+      ziel.set(`${x0 + (rest % b)},${ebene - tiefe},${z0 + Math.floor(rest / b)}`, block);
+    }
+  }
+  return q === b * t * (plan.groesse.y + tiefe);
+}
+const innenLive = nach(zeiten.innen, 'innen', (m) => m.stuecke.some((s) => s.p.includes('minecraft:oak_planks')));
+melde('Innenraum kommt sofort an', !!innenLive && innenLive.am - zeiten.innen < 1500, innenLive ? `${innenLive.am - zeiten.innen} ms nach dem Befehl` : 'gar nicht');
+
+// Wie ein Browser, der die Seite neu öffnet: Übersicht im Start, dann die Stücke bestellen.
+const ws2 = new WebSocket(`ws://localhost:8787/api/live/ws`, { headers: { cookie, origin: A } });
+const zweite = [];
+await new Promise((ok, fehler) => {
+  ws2.onopen = ok;
+  ws2.onerror = () => fehler(new Error('Zweite Verbindung ging nicht auf.'));
+});
+ws2.onmessage = (e) => e.data !== 'pong' && zweite.push(JSON.parse(e.data));
+ws2.send(JSON.stringify({ t: 'abo', an: true }));
+const warten = async (bedingung, ms = 5000) => {
+  for (const bis = Date.now() + ms; Date.now() < bis && !bedingung(); ) await new Promise((r) => setTimeout(r, 50));
+};
+await warten(() => zweite.some((m) => m.t === 'start'));
+const uebersicht = zweite.find((m) => m.t === 'start')?.innen?.h ?? {};
+const keys = Object.keys(uebersicht);
+ws2.send(JSON.stringify({ t: 'innen-hol', keys }));
+const da = () => new Set(zweite.filter((m) => m.t === 'innen').flatMap((m) => m.stuecke.map((s) => `${s.k[0]},${s.k[1]}`)));
+await warten(() => da().size >= keys.length);
+ws2.close();
+const welt = new Map();
+let vollstaendig = true;
+for (const m of zweite.filter((m) => m.t === 'innen')) for (const s of m.stuecke) vollstaendig &&= stueckLesen(s, welt);
+melde('Innenraum: alle Stücke nachgeladen', keys.length > 0 && da().size === keys.length && vollstaendig, `${da().size} von ${keys.length} Chunks`);
+melde('Innenraum: Holz steht an der richtigen Stelle', welt.get('20,5,55') === 'minecraft:oak_planks' && welt.get('22,7,57') === 'minecraft:oak_planks', welt.get('20,5,55'));
+melde('Innenraum: Gold 30 Blöcke unter dem Boden', welt.get('20,-30,55') === 'minecraft:gold_block', welt.get('20,-30,55'));
+const imPlan = [...welt.keys()].filter((k) => planZellen.has(k)).length;
+melde('Innenraum lässt die Planblöcke aus', imPlan === 0, `${imPlan} Planzellen im Innenraum`);
 console.log(process.exitCode ? '\nTest fehlgeschlagen.' : '\nTest bestanden.');

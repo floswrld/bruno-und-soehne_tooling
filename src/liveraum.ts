@@ -5,6 +5,10 @@
 // Gespeichert wird im Speicher des Objekts selbst, gesammelt alle zwei Sekunden: ein Bitfeld über alle Planblöcke,
 // wer jeden davon gebaut hat, die falsch gesetzten Blöcke, die letzten Einträge im Feed und der Standort.
 // Positionen und die Tab-Liste sind flüchtig, die Mods schicken sie ohnehin laufend.
+//
+// Dazu der Innenraum: was in der Welt innerhalb des Gebäudes steht, vom Dach bis INNEN_TIEFE Blöcke unter den Boden.
+// Nur zum Anschauen, er zählt nicht zum Baufortschritt und kennt kein richtig oder falsch. Planblöcke gehören dem
+// Abgleich oben. Er kommt in Stücken, eine Chunk-Säule je Stück, und wird je Stück gespeichert.
 import { DurableObject } from 'cloudflare:workers';
 import plan from './rechenzentrum.meta.json';
 import type { Env } from './types';
@@ -22,6 +26,11 @@ type Zustand = 0 | 1 | string; // offen, gebaut, falscher Block
 type Eintrag = { id: number; mc_name: string; plus: number; minus: number; falsch: number; bloecke: Record<string, number>; von: number; am: number };
 // wer[i]: wer Planblock i gebaut hat, als Nummer in bauer (ab 1). 0 heißt: nicht gesehen, wer es war.
 type Gespeichert = { hash: string; gebaut: Uint8Array; falsch: [number, string][]; gemeldet: boolean; wer?: Uint8Array; bauer?: string[] };
+// Ein Stück Innenraum: Rechteck in Plan-Koordinaten [x0, z0, Breite, Tiefe], alle Höhen von -INNEN_TIEFE bis zum Dach.
+// p: Blockarten. r: Lauflängen [Anzahl, Art, Anzahl, Art, …], Art 0 = nichts, sonst p[Art - 1].
+// Reihenfolge: y außen, dann z, dann x. h: Prüfsumme, daran sehen Mods und Browser, ob sie den Stand schon haben.
+type Stueck = { k: [number, number, number, number]; p: string[]; r: number[]; h: string };
+type Speicherbar = 'stand' | 'feed' | 'namen' | 'skins' | 'innen';
 
 const NAME = /^[A-Za-z0-9_.*-]{1,32}$/;
 const BLOCK = /^[a-z0-9_.-]+:[a-z0-9_/.-]{1,80}$/;
@@ -39,6 +48,11 @@ const SPEICHERN_MS = 2000;
 const BAUER_MAX = 255; // passt in ein Byte je Planblock
 // Alles, was schon stand, bevor gezählt wurde, hat Bruno_Soehne gebaut (Angabe der Geschäftsführung, November 2026).
 const ERSTER_BAUER = 'Bruno_Soehne';
+const INNEN_TIEFE = 40; // So weit unter den Boden zeigt der Bauplan, was in der Welt steht.
+const INNEN_HOEHE = plan.groesse.y + INNEN_TIEFE;
+const INNEN_ARTEN_MAX = 1024;
+const INNEN_PAKET = 400_000; // Zeichen je Nachricht an einen Browser
+const SPEICHERN_JE_AUFRUF = 100; // put() und delete() nehmen höchstens 128 Einträge
 
 const zahl = (v: unknown, grenze: number): number | null => (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= grenze ? v : null);
 const runden = (v: number, stellen: number) => Math.round(v * stellen) / stellen;
@@ -49,6 +63,48 @@ function base64(bytes: Uint8Array): string {
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(s);
 }
+
+// FNV-1a über Blockarten und Lauflängen. Die Mod rechnet genauso (Innenraum.java).
+function stueckHash(p: string[], r: number[]): string {
+  const text = `${p.join(',')}|${r.join(',')}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+// Das Rechteck der Chunk-Säule, in der die Plan-Spalte x0 / z0 liegt, beschnitten auf das Gebäude.
+function stueckRahmen(anker: Anker, x0: number, z0: number): [number, number, number, number] | null {
+  const { x: X, z: Z } = plan.groesse;
+  if (x0 < 0 || x0 >= X || z0 < 0 || z0 >= Z) return null;
+  const vonX = anker.x - plan.gebaeude.x;
+  const vonZ = anker.z - plan.gebaeude.z;
+  const cx = Math.floor((vonX + x0) / 16) * 16;
+  const cz = Math.floor((vonZ + z0) / 16) * 16;
+  const a = Math.max(cx, vonX) - vonX;
+  const c = Math.max(cz, vonZ) - vonZ;
+  return [a, c, Math.min(cx + 16, vonX + X) - vonX - a, Math.min(cz + 16, vonZ + Z) - vonZ - c];
+}
+
+function stueckPruefen(roh: unknown, anker: Anker): Stueck | null {
+  const { k, p, r } = (roh ?? {}) as Record<string, unknown>;
+  if (!Array.isArray(k) || k.length !== 4 || !k.every((v) => Number.isInteger(v))) return null;
+  const soll = stueckRahmen(anker, k[0], k[1]);
+  if (!soll || soll.some((v, i) => v !== k[i])) return null;
+  if (!Array.isArray(p) || p.length > INNEN_ARTEN_MAX || !p.every((b) => typeof b === 'string' && BLOCK.test(b))) return null;
+  const zellen = soll[2] * soll[3] * INNEN_HOEHE;
+  if (!Array.isArray(r) || r.length % 2 || r.length > 2 * zellen) return null;
+  let summe = 0;
+  for (let i = 0; i < r.length; i += 2) {
+    const n = r[i];
+    const art = r[i + 1];
+    if (!Number.isInteger(n) || n < 1 || !Number.isInteger(art) || art < 0 || art > p.length) return null;
+    summe += n;
+  }
+  if (summe !== zellen) return null;
+  return { k: soll, p, r, h: stueckHash(p, r) };
+}
+
+const stueckKey = (s: Stueck) => `${s.k[0]},${s.k[1]}`;
 
 function posPruefen(roh: unknown, dimension: string | null): PosWerte | null {
   if (!Array.isArray(roh) || roh.length < 8) return null;
@@ -96,7 +152,9 @@ export class LiveRaum extends DurableObject<Env> {
   private tab = new Map<WebSocket, TabEintrag[]>();
   private pos = new Map<string, Position>();
   private haeute = new Map<string, string>();
-  private schmutzig = new Set<'stand' | 'feed' | 'namen' | 'skins'>();
+  private schmutzig = new Set<Speicherbar>();
+  private innen = new Map<string, Stueck>(); // Schlüssel "x0,z0"
+  private innenSchmutzig = new Set<string>();
   private alarmGesetzt = false;
   private online = '';
   private soll: { bloecke: string[]; index: Uint16Array } | null = null;
@@ -149,6 +207,25 @@ export class LiveRaum extends DurableObject<Env> {
     this.bauerZaehlen();
     this.namen = namen ?? {};
     this.skins = skins ?? {};
+    await this.innenLaden();
+  }
+
+  // Die Stücke gelten nur für den Standort und Plan, zu dem sie gemeldet wurden.
+  private async innenLaden() {
+    const s = this.ctx.storage;
+    const zu = await s.get<{ hash: string; anker: Anker | null }>('innen-zu');
+    const passt = !!zu && zu.hash === plan.hash && (zu.anker === null ? this.einstellung.anker === null : gleicherAnker(zu.anker, this.einstellung.anker));
+    if (!passt) return this.innenLeeren();
+    for (const [key, stueck] of await s.list<Stueck>({ prefix: 'innen:' })) this.innen.set(key.slice('innen:'.length), stueck);
+  }
+
+  private async innenLeeren() {
+    this.innen.clear();
+    this.innenSchmutzig.clear();
+    const s = this.ctx.storage;
+    const alt = [...(await s.list({ prefix: 'innen:' })).keys()];
+    for (let i = 0; i < alt.length; i += SPEICHERN_JE_AUFRUF) await s.delete(alt.slice(i, i + SPEICHERN_JE_AUFRUF));
+    await s.put('innen-zu', { hash: plan.hash, anker: this.einstellung.anker });
   }
 
   // ---------- Verbindungen ----------
@@ -228,6 +305,10 @@ export class LiveRaum extends DurableObject<Env> {
   // ---------- Browser ----------
 
   private vomBrowser(ws: WebSocket, a: Anhang, m: Record<string, unknown>) {
+    if (m.t === 'innen-hol') {
+      if (a.abo) this.innenSchicken(ws, m.keys);
+      return;
+    }
     if (m.t !== 'abo') return;
     a.abo = m.an === true;
     ws.serializeAttachment(a);
@@ -246,6 +327,7 @@ export class LiveRaum extends DurableObject<Env> {
       admin: a.admin,
       gebaut: base64(this.gebaut),
       falsch: [...this.falsch],
+      innen: this.innenUebersicht(),
     };
   }
 
@@ -283,6 +365,9 @@ export class LiveRaum extends DurableObject<Env> {
         return;
       case 'ecke':
         await this.ecke(ws, a, m);
+        return;
+      case 'innen':
+        if (a.aktiv) this.innenVonMod(ws, m);
         return;
     }
   }
@@ -419,6 +504,56 @@ export class LiveRaum extends DurableObject<Env> {
     this.anBrowser({ t: 'feed', eintrag: e });
   }
 
+  // ---------- Innenraum ----------
+
+  // Tiefe und Prüfsumme je Stück. Den Inhalt holt sich ein Browser nur für Stücke, die er so noch nicht kennt.
+  private innenUebersicht() {
+    return { tiefe: INNEN_TIEFE, h: Object.fromEntries([...this.innen].map(([key, s]) => [key, s.h])) };
+  }
+
+  private innenVonMod(ws: WebSocket, m: Record<string, unknown>) {
+    const anker = this.einstellung.anker;
+    if (!anker || m.hash !== plan.hash || !gleicherAnker(m.anker as Anker, anker) || !Array.isArray(m.stuecke)) return;
+    const neu: Stueck[] = [];
+    for (const roh of m.stuecke.slice(0, 200)) {
+      const s = stueckPruefen(roh, anker);
+      if (!s) continue;
+      const key = stueckKey(s);
+      if (this.innen.get(key)?.h === s.h) continue;
+      this.innen.set(key, s);
+      this.innenSchmutzig.add(key);
+      neu.push(s);
+    }
+    if (!neu.length) return;
+    this.merken('innen');
+    this.anBrowser({ t: 'innen', stuecke: neu });
+    // Die anderen Mods brauchen nur die Prüfsumme: Dann melden sie dasselbe nicht noch einmal.
+    const text = JSON.stringify({ t: 'innen-h', liste: neu.map((s) => [stueckKey(s), s.h]) });
+    for (const w of this.ctx.getWebSockets('mod')) {
+      if (w !== ws && (w.deserializeAttachment() as Anhang).aktiv) this.senden(w, text);
+    }
+  }
+
+  private innenSchicken(ws: WebSocket, keys: unknown) {
+    if (!Array.isArray(keys)) return;
+    let paket: Stueck[] = [];
+    let groesse = 0;
+    const raus = () => {
+      if (paket.length) this.senden(ws, { t: 'innen', stuecke: paket });
+      paket = [];
+      groesse = 0;
+    };
+    for (const key of new Set(keys.slice(0, 2000))) {
+      const s = typeof key === 'string' ? this.innen.get(key) : undefined;
+      if (!s) continue;
+      const n = s.r.length * 5 + s.p.length * 32 + 64;
+      if (groesse && groesse + n > INNEN_PAKET) raus();
+      paket.push(s);
+      groesse += n;
+    }
+    raus();
+  }
+
   // Standard-Skins (Steve, Alex, …) liegen nur im Spiel. Die Mod schickt sie einmal mit.
   private async hautSpeichern(m: Record<string, unknown>) {
     if (typeof m.res !== 'string' || !RES.test(m.res) || typeof m.png !== 'string' || m.png.length > 24_000) return;
@@ -475,6 +610,7 @@ export class LiveRaum extends DurableObject<Env> {
       werte.feed = [];
     }
     await this.ctx.storage.put(werte);
+    if (verschoben) await this.innenLeeren();
     for (const w of this.ctx.getWebSockets()) {
       const x = w.deserializeAttachment() as Anhang;
       if (x.rolle === 'mod') this.senden(w, this.startFuerMod(x));
@@ -518,6 +654,7 @@ export class LiveRaum extends DurableObject<Env> {
       ...this.onlineListe(),
       pos: [...this.pos.values()].map((p) => p.werte),
       feed: this.feed,
+      innen: this.innenUebersicht(),
     };
   }
 
@@ -631,7 +768,7 @@ export class LiveRaum extends DurableObject<Env> {
     return { hash: plan.hash, gebaut: this.gebaut, falsch: [...this.falsch], gemeldet: this.gemeldet, wer: this.wer, bauer: this.bauer };
   }
 
-  private merken(was: 'stand' | 'feed' | 'namen' | 'skins') {
+  private merken(was: Speicherbar) {
     this.schmutzig.add(was);
     if (this.alarmGesetzt) return;
     this.alarmGesetzt = true;
@@ -647,6 +784,16 @@ export class LiveRaum extends DurableObject<Env> {
     if (was.includes('feed')) werte.feed = this.feed;
     if (was.includes('namen')) werte.namen = this.namen;
     if (was.includes('skins')) werte.skins = this.skins;
-    if (Object.keys(werte).length) await this.ctx.storage.put(werte);
+    if (was.includes('innen')) {
+      for (const key of this.innenSchmutzig) {
+        const s = this.innen.get(key);
+        if (s) werte[`innen:${key}`] = s;
+      }
+      this.innenSchmutzig.clear();
+    }
+    const eintraege = Object.entries(werte);
+    for (let i = 0; i < eintraege.length; i += SPEICHERN_JE_AUFRUF) {
+      await this.ctx.storage.put(Object.fromEntries(eintraege.slice(i, i + SPEICHERN_JE_AUFRUF)));
+    }
   }
 }

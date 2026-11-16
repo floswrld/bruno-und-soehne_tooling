@@ -1,7 +1,7 @@
-// Bauplan des Rechenzentrums: 3D-Ansicht, Ebenen, Baufortschritt, Materialliste, live mitlaufende Spieler.
-// Wird erst geladen, wenn jemand die Seite öffnet.
+// Bauplan des Rechenzentrums: 3D-Ansicht, Ebenen, Baufortschritt, Materialliste, live mitlaufende Spieler und der
+// Innenraum, wie er gerade in der Welt steht. Wird erst geladen, wenn jemand die Seite öffnet.
 import * as THREE from '/vendor/three/three.module.min.js';
-import { BLOECKE } from '/bloecke.js';
+import { baustoff } from '/bloecke.js';
 import { Kamerafuehrung } from '/kamera.js';
 import { Bewegung, figurBauen } from '/figur.js';
 import { ersatzHaut, hautLaden, hautVergessen, kopfBild } from '/haut.js';
@@ -22,32 +22,33 @@ const GLAS = 2;
 const FORM = 3;
 const GEIST = 4;
 
-function ohneNamespace(block) {
-  return block.replace('minecraft:', '').replaceAll('_', ' ');
-}
-const blockName = (block) => BLOECKE[block]?.name ?? ohneNamespace(block);
-const blockFarbe = (block) => BLOECKE[block]?.farbe ?? 0x888888;
+const blockName = (block) => baustoff(block).name;
+const blockFarbe = (block) => baustoff(block).farbe;
+// Natürlicher Boden im Innenraum. Lässt sich ausblenden, dann sieht man, was darin gebaut ist.
+const GELAENDE = /^minecraft:(stone|granite|diorite|andesite|tuff|calcite|deepslate|bedrock|dirt|coarse_dirt|rooted_dirt|grass_block|podzol|mycelium|mud|clay|gravel|sand|red_sand|sandstone|red_sandstone|moss_block|moss_carpet|snow|snow_block|powder_snow|ice|packed_ice|water|lava|smooth_basalt|dripstone_block|pointed_dripstone|amethyst_block|budding_amethyst|(small|medium|large)_amethyst_bud|amethyst_cluster|glow_lichen|hanging_roots|cave_vines|cave_vines_plant|spore_blossom|big_dripleaf|big_dripleaf_stem|small_dripleaf|azalea|flowering_azalea|short_grass|tall_grass|fern|large_fern|dead_bush|bush|firefly_bush|short_dry_grass|tall_dry_grass|seagrass|tall_seagrass|kelp|kelp_plant|sugar_cane|bamboo|lily_pad|brown_mushroom|red_mushroom|sweet_berry_bush|pink_petals|wildflowers|leaf_litter|cactus|vine|infested_stone|infested_deepslate|sculk|sculk_vein|poppy|dandelion|oxeye_daisy|cornflower|allium|azure_bluet|blue_orchid|lily_of_the_valley|[a-z]+_tulip|sunflower|lilac|rose_bush|peony|[a-z_]+_ore|(oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry|pale_oak)_log|(oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry|pale_oak|azalea|flowering_azalea)_leaves)$/;
 const hexFarbe = (n) => `#${n.toString(16).padStart(6, '0')}`;
 
 // Form eines Blocks. Alles, was hier nicht steht, ist ein voller Würfel.
 function formVon(block, zustand) {
   const id = block.replace('minecraft:', '');
-  if (/_stained_glass$|^glass$|^tinted_glass$|^water$/.test(id)) return { art: GLAS };
+  // Im Innenraum kommt alles vor, was das Spiel kennt. Die Ausrichtung schickt die Mod nicht mit, darum nur grob.
+  if (/_stained_glass$|^glass$|^tinted_glass$|^water$|^bubble_column$|^ice$|^frosted_ice$|^slime_block$|^honey_block$/.test(id)) return { art: GLAS };
   if (id === 'nether_portal') return { art: FORM, typ: 'portal' };
-  if (id === 'iron_bars' || id === 'glass_pane') return { art: FORM, typ: 'gitter' };
-  if (/_fence$/.test(id)) return { art: FORM, typ: 'zaun' };
+  if (/_bars$|_pane$/.test(id)) return { art: FORM, typ: 'gitter' };
+  if (/_fence$|_fence_gate$/.test(id)) return { art: FORM, typ: 'zaun' };
   if (/_wall$/.test(id)) return { art: FORM, typ: 'mauer' };
   if (/_slab$/.test(id)) return { art: FORM, typ: zustand?.includes('top') ? 'stufeOben' : 'stufe' };
-  if (/_carpet$|^rail$|^redstone_wire$|^lily_pad$/.test(id)) return { art: FORM, typ: 'teppich' };
-  if (id === 'comparator') return { art: FORM, typ: 'flach' };
+  if (/_carpet$|rail$|^redstone_wire$|^lily_pad$|_pressure_plate$|^snow$|^pink_petals$|^wildflowers$|^leaf_litter$|^tripwire$/.test(id)) return { art: FORM, typ: 'teppich' };
+  if (/^(comparator|repeater|daylight_detector|sculk_sensor|calibrated_sculk_sensor)$/.test(id)) return { art: FORM, typ: 'flach' };
   if (/_trapdoor$/.test(id)) return { art: FORM, typ: 'klappe' };
-  if (id === 'iron_chain' || id === 'lightning_rod' || id === 'end_rod') return { art: FORM, typ: 'stange' };
-  if (id === 'lantern') return { art: FORM, typ: 'laterne' };
-  if (/_bed$|^campfire$|^soul_campfire$/.test(id)) return { art: FORM, typ: 'bett' };
+  if (/chain$|lightning_rod$|^end_rod$/.test(id)) return { art: FORM, typ: 'stange' };
+  if (/torch$/.test(id)) return { art: FORM, typ: 'fackel' };
+  if ((/lantern$/.test(id) && !/^(sea|jack_o)_lantern$/.test(id)) || /candle$|^flower_pot$|^potted_|_head$|_skull$|^decorated_pot$|_amethyst_bud$|^sea_pickle$|^turtle_egg$/.test(id)) return { art: FORM, typ: 'laterne' };
+  if (/_bed$|campfire$/.test(id)) return { art: FORM, typ: 'bett' };
   if (/_door$/.test(id)) return { art: FORM, typ: 'tuer' };
-  if (id === 'lever' || /_button$/.test(id)) return { art: FORM, typ: 'knopf' };
-  if (/^(short_grass|fern|poppy|oxeye_daisy|dandelion|cornflower|allium|sugar_cane|bamboo|carrots)$/.test(id)) return { art: FORM, typ: 'pflanze' };
-  if (id === 'hopper' || id === 'cauldron' || id === 'chest' || id === 'waxed_copper_chest' || id === 'brewing_stand' || id === 'anvil') return { art: FORM, typ: 'kiste' };
+  if (id === 'lever' || /_button$|_sign$|_banner$|_fan$|^ladder$|^vine$|^glow_lichen$|^sculk_vein$|^resin_clump$|^cocoa$|^tripwire_hook$/.test(id)) return { art: FORM, typ: 'knopf' };
+  if (/^(short_grass|tall_grass|fern|large_fern|poppy|oxeye_daisy|dandelion|cornflower|allium|azure_bluet|blue_orchid|lily_of_the_valley|wither_rose|torchflower|sunflower|lilac|rose_bush|peony|sugar_cane|bamboo|bamboo_sapling|carrots|potatoes|beetroots|wheat|sweet_berry_bush|dead_bush|bush|firefly_bush|short_dry_grass|tall_dry_grass|seagrass|tall_seagrass|kelp|kelp_plant|cave_vines|cave_vines_plant|weeping_vines|weeping_vines_plant|twisting_vines|twisting_vines_plant|hanging_roots|spore_blossom|small_dripleaf|big_dripleaf_stem|pointed_dripstone|amethyst_cluster|cobweb|nether_wart|crimson_roots|warped_roots|nether_sprouts|brown_mushroom|red_mushroom|crimson_fungus|warped_fungus|pitcher_plant|pitcher_crop|torchflower_crop|open_eyeblossom|closed_eyeblossom|mangrove_propagule|[a-z]+_tulip|[a-z_]+_sapling|[a-z_]+_coral|[a-z]+_stem)$/.test(id)) return { art: FORM, typ: 'pflanze' };
+  if (/^(hopper|cauldron|water_cauldron|lava_cauldron|powder_snow_cauldron|chest|trapped_chest|ender_chest|brewing_stand|anvil|chipped_anvil|damaged_anvil|bell|grindstone|stonecutter|enchanting_table|lectern|conduit|cake)$|copper_chest$/.test(id)) return { art: FORM, typ: 'kiste' };
   return { art: OPAK };
 }
 
@@ -156,7 +157,7 @@ function atlasBauen(bloecke) {
   atlasDaten = new Uint8Array(256 * 4 * schichten);
   const kachel = new Map();
   bloecke.forEach((block, i) => {
-    bildZeichnen(block, BLOECKE[block] ?? { farbe: 0x888888, muster: 'beton' }, i);
+    bildZeichnen(block, baustoff(block), i);
     kachel.set(block, i);
   });
   bildZeichnen('falsch', { farbe: FARBE_FALSCH, muster: 'glatt' }, bloecke.length);
@@ -175,10 +176,11 @@ function atlasBauen(bloecke) {
 }
 
 // Lambert mit Texturschicht je Fläche. Licht und Schatten macht weiter three.js.
-function blockMaterial(tex, uniforms, extra) {
+// atlas ist { value: Textur }: So lässt sich der Atlas austauschen, wenn neue Blockarten dazukommen.
+function blockMaterial(atlas, uniforms, extra) {
   const mat = new THREE.MeshLambertMaterial({ ...extra });
   mat.onBeforeCompile = (s) => {
-    s.uniforms.bpAtlas = { value: tex };
+    s.uniforms.bpAtlas = atlas;
     s.uniforms.bpLeuchten = uniforms.leuchten;
     s.vertexShader = `attribute vec3 aBp; varying vec3 vBp;\n${s.vertexShader}`.replace('#include <begin_vertex>', '#include <begin_vertex>\nvBp = aBp;');
     s.fragmentShader = `precision highp sampler2DArray; uniform sampler2DArray bpAtlas; uniform float bpLeuchten; varying vec3 vBp;\n${s.fragmentShader}`
@@ -266,6 +268,7 @@ function formZeichnen(f, typ, x, y, z, t, verbunden) {
     case 'flach': return q(0, 0, 0, 1, 0.14, 1);
     case 'klappe': return q(0, 0, 0, 1, 0.19, 1);
     case 'stange': return q(0.42, 0, 0.42, 0.58, 1, 0.58);
+    case 'fackel': return q(0.44, 0, 0.44, 0.56, 0.62, 0.56);
     case 'laterne': return q(0.31, 0, 0.31, 0.69, 0.56, 0.69);
     case 'bett': return q(0, 0, 0, 1, 0.56, 1);
     case 'tuer': return q(0.84, 0, 0, 1, 1, 1);
@@ -411,11 +414,12 @@ function ebeneBauen(y, d) {
 // ---------- Seite ----------
 
 const THEMEN = {
-  hell: { himmel: 0xc6d7e6, nebel: 0xc6d7e6, boden: 0x6f8a58, hemi: [0xffffff, 0x8a97a5, 1.25], sonne: [0xfff4e0, 2.1], gegen: 0.35, leuchten: 0.22 },
-  dunkel: { himmel: 0x0c1219, nebel: 0x0c1219, boden: 0x22301f, hemi: [0xa9bcdc, 0x2a3440, 1.0], sonne: [0xb4c6e6, 0.95], gegen: 0.2, leuchten: 1.6 },
+  hell: { himmel: 0xc6d7e6, nebel: 0xc6d7e6, boden: 0x6f8a58, grube: 0x4a3b2e, hemi: [0xffffff, 0x8a97a5, 1.25], sonne: [0xfff4e0, 2.1], gegen: 0.35, leuchten: 0.22 },
+  dunkel: { himmel: 0x0c1219, nebel: 0x0c1219, boden: 0x22301f, grube: 0x1d1813, hemi: [0xa9bcdc, 0x2a3440, 1.0], sonne: [0xb4c6e6, 0.95], gegen: 0.2, leuchten: 1.6 },
 };
 
-export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }, esc) {
+// senden: Nachricht an den Live-Raum, gibt false zurück, wenn die Leitung gerade nicht steht.
+export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast, senden }, esc) {
   const d = planEntpacken(plan, start.fortschritt);
   const anker = start.anker ?? plan.anker;
   const server = start.server;
@@ -425,7 +429,9 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   const { X, Y, Z } = d;
   const g = plan.gebaeude;
   const abschnitte = Object.fromEntries(Object.keys(plan.abschnitte).map((a) => [a, true]));
-  const sicht = { modus: 'alles', abschnitte, ebene: Y - 1, nurEbene: false, umriss: true };
+  // Innenraum: so viele Ebenen unter dem Boden kommen live aus der Welt dazu. 0 heißt, der Live-Raum kennt ihn nicht.
+  const T = start.innen?.tiefe ?? 0;
+  const sicht = { modus: 'alles', abschnitte, ebene: Y - 1, nurEbene: false, umriss: true, innen: true, gelaende: true };
   wurzel.innerHTML = `
     <div class="bp-layout">
       <section class="bp-buehne" aria-label="3D-Ansicht des Rechenzentrums">
@@ -464,13 +470,14 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
         <div class="bp-unten">
           <label class="bp-regler">
             <span data-ebene-text></span>
-            <input type="range" min="0" max="${Y - 1}" value="${Y - 1}" aria-label="Ebene">
+            <input type="range" min="${-T}" max="${Y - 1}" value="${Y - 1}" aria-label="Ebene">
           </label>
           <label class="bp-haken"><input type="checkbox" data-nur> Nur diese Ebene</label>
           <details class="bp-mehr">
             <summary>Anzeigen</summary>
             <div class="bp-mehr-liste">
               ${Object.entries(plan.abschnitte).map(([a, e]) => `<label class="bp-haken"><input type="checkbox" data-abschnitt="${a}" checked> ${esc(e.name)}</label>`).join('')}
+              ${T ? '<label class="bp-haken"><input type="checkbox" data-innen checked> Innenraum live</label><label class="bp-haken"><input type="checkbox" data-gelaende checked> Erde und Stein</label>' : ''}
             </div>
           </details>
         </div>
@@ -486,6 +493,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
           <ol class="bp-bauer" data-live-bauer></ol>
           <h3 class="bp-zwischen">Zuletzt am Bau</h3>
           <ol class="bp-feed" data-live-feed></ol>
+          ${T ? '<h3 class="bp-zwischen">Innenraum</h3><p class="small" data-innen-stand></p>' : ''}
           <div data-live-standort></div>
         </section>
         <section class="panel bp-tafel" data-tafel="fortschritt" hidden>
@@ -554,7 +562,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     const von = sicht.nurEbene ? sicht.ebene : 0;
     const bis = sicht.ebene;
     const proBlock = new Map();
-    for (let y = von; y <= bis; y++) {
+    for (let y = Math.max(0, von); y <= Math.min(Y - 1, bis); y++) {
       zaehler[y].forEach((z, p) => {
         const e = d.eintraege[p];
         if (!sicht.abschnitte[e.abschnitt] || !z.gesamt) return;
@@ -616,14 +624,36 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   wiese.magFilter = THREE.NearestFilter;
   wiese.minFilter = THREE.LinearMipmapLinearFilter;
   wiese.generateMipmaps = true;
-  wiese.repeat.set(70, 70);
+  // Die Form rechnet in Blöcken: Die Textur wiederholt sich alle 8000 / 70 Blöcke, wie früher auf dem Kreis.
+  wiese.repeat.set(70 / 8000, 70 / 8000);
   wiese.needsUpdate = true;
   const bodenMaterial = new THREE.MeshLambertMaterial({ color: 0x6f8a58, map: wiese });
-  const boden = new THREE.Mesh(new THREE.CircleGeometry(4000, 48), bodenMaterial);
+  // Sobald der Innenraum zu sehen ist, hat die Wiese über dem Gebäude ein Loch: Darunter liegt, was in der Welt steht.
+  function bodenForm(loch) {
+    const form = new THREE.Shape().absarc(0, 0, 4000, 0, Math.PI * 2, false);
+    if (loch) {
+      const rand = new THREE.Path();
+      rand.moveTo(-X / 2, -Z / 2);
+      rand.lineTo(-X / 2, Z / 2);
+      rand.lineTo(X / 2, Z / 2);
+      rand.lineTo(X / 2, -Z / 2);
+      rand.lineTo(-X / 2, -Z / 2);
+      form.holes.push(rand);
+    }
+    return new THREE.ShapeGeometry(form, 64);
+  }
+  const boden = new THREE.Mesh(bodenForm(false), bodenMaterial);
   boden.rotation.x = -Math.PI / 2;
   boden.position.set(X / 2, -0.03, Z / 2);
   boden.receiveShadow = true;
   szene.add(boden);
+  // Die Baugrube darunter, nur von innen zu sehen: Wo nichts steht, schaut man durchs Loch auf Erde statt in den Himmel.
+  const grubeMaterial = new THREE.MeshLambertMaterial({ color: 0x4a3b2e, side: THREE.BackSide });
+  const grube = new THREE.Mesh(new THREE.BoxGeometry(X, Math.max(T, 1), Z), grubeMaterial);
+  grube.position.set(X / 2, -Math.max(T, 1) / 2 - 0.02, Z / 2);
+  grube.receiveShadow = true;
+  grube.visible = false;
+  szene.add(grube);
 
   const kamera = new THREE.PerspectiveCamera(40, 1, 1, 5000);
   const mitte = new THREE.Vector3(g.x + g.breite / 2, 12, g.z + g.tiefe / 2);
@@ -662,12 +692,36 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   const bloecke = [...new Set(d.eintraege.map((e) => e.block))];
   const atlas = atlasBauen(bloecke);
   const uniforms = { leuchten: { value: 0.5 } };
-  const vollMaterial = blockMaterial(atlas.tex, uniforms);
-  const glasMaterial = blockMaterial(atlas.tex, uniforms, { transparent: true, opacity: 0.42, depthWrite: false });
+  const planAtlas = { value: atlas.tex };
+  const vollMaterial = blockMaterial(planAtlas, uniforms);
+  const glasMaterial = blockMaterial(planAtlas, uniforms, { transparent: true, opacity: 0.42, depthWrite: false });
+  // Der Innenraum hat einen eigenen Atlas. Er wächst mit jeder Blockart, die aus der Welt dazukommt.
+  const innenAtlas = { value: atlasBauen([]).tex };
+  const innenVoll = blockMaterial(innenAtlas, uniforms);
+  const innenGlas = blockMaterial(innenAtlas, uniforms, { transparent: true, opacity: 0.42, depthWrite: false });
   const umrissMaterial = new THREE.MeshBasicMaterial({ color: 0xb8d2ea, transparent: true, opacity: 0.1, depthWrite: false });
 
   const stufen = Array.from({ length: Y }, () => ({ voll: new THREE.Group(), deckel: new THREE.Group(), glas: new THREE.Group(), geist: new THREE.Group() }));
   stufen.forEach((s) => szene.add(s.voll, s.deckel, s.glas, s.geist));
+
+  // Innenraum: eigenes Raster mit H Ebenen, Ebene L liegt auf Plan-y L - T. Planzellen bleiben leer, die meldet die
+  // Mod hier nicht. zellen: Blockart + 1 (Liste innenArten), 0 = nichts oder noch nicht gesehen.
+  const H = Y + T;
+  const iz = { X, Y: H, Z, zellen: new Uint16Array(X * H * Z), klasse: new Uint8Array(X * H * Z), kachel: new Uint16Array(X * H * Z), formen: [] };
+  const innenArten = [];
+  const innenNr = new Map(); // Block -> Index in innenArten
+  const innenErde = []; // je Blockart: gehört zum Gelände
+  const innenHash = new Map(); // Stück -> Prüfsumme, so wie es hier steht
+  const innenAngefragt = new Map(); // Stück -> Prüfsumme, die schon beim Live-Raum bestellt ist
+  const innenServer = new Set(); // Stücke, die der Live-Raum kennt
+  let innenAtlasArten = 0;
+  const innenStufen = Array.from({ length: H }, () => ({ voll: new THREE.Group(), deckel: new THREE.Group(), glas: new THREE.Group() }));
+  for (const s of innenStufen) {
+    for (const gruppe of [s.voll, s.deckel, s.glas]) {
+      gruppe.position.y = -T;
+      szene.add(gruppe);
+    }
+  }
 
   const markierung = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.BoxGeometry(1.04, 1.04, 1.04)),
@@ -701,23 +755,24 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     }
   }
 
-  function stufeFuellen(y, ergebnis) {
-    const s = stufen[y];
+  function stufeFuellen(s, ergebnis, voll = vollMaterial, glas = glasMaterial) {
     for (const gruppe of [s.voll, s.deckel, s.glas, s.geist]) {
+      if (!gruppe) continue;
       for (const m of gruppe.children) m.geometry.dispose();
       gruppe.clear();
     }
     const dazu = (gruppe, geo, material, schatten) => {
       if (!geo) return;
+      if (!gruppe) return geo.dispose();
       const mesh = new THREE.Mesh(geo, material);
       mesh.castShadow = schatten;
       mesh.receiveShadow = true;
       gruppe.add(mesh);
     };
-    dazu(s.voll, ergebnis.opak, vollMaterial, true);
-    dazu(s.voll, ergebnis.form, vollMaterial, true);
-    dazu(s.deckel, ergebnis.deckel, vollMaterial, false);
-    dazu(s.glas, ergebnis.glas, glasMaterial, false);
+    dazu(s.voll, ergebnis.opak, voll, true);
+    dazu(s.voll, ergebnis.form, voll, true);
+    dazu(s.deckel, ergebnis.deckel, voll, false);
+    dazu(s.glas, ergebnis.glas, glas, false);
     dazu(s.geist, ergebnis.geist, umrissMaterial, false);
   }
 
@@ -731,7 +786,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     for (let y = 0; y < Y; y++) {
       const ergebnis = ebeneBauen(y, d);
       if (lauf !== bauLauf || tot) { Object.values(ergebnis).forEach((geo) => geo?.dispose()); return; }
-      stufeFuellen(y, ergebnis);
+      stufeFuellen(stufen[y], ergebnis);
       if (performance.now() - letzte > 40) {
         ladeAnzeige.textContent = `Modell wird gebaut … ${Math.round(((y + 1) / Y) * 100)} %`;
         ebenenZeigen();
@@ -756,8 +811,14 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
       s.geist.visible = an;
       s.deckel.visible = y === sicht.ebene;
     });
+    innenStufen.forEach((s, L) => {
+      const an = sicht.innen && ebenenSichtbar(L - T);
+      s.voll.visible = an;
+      s.glas.visible = an;
+      s.deckel.visible = sicht.innen && L - T === sicht.ebene;
+    });
     const welt = anker ? ` · Welt-Y ${anker.y + sicht.ebene - g.y}` : '';
-    $('[data-ebene-text]').textContent = `Ebene y = ${sicht.ebene}${welt}`;
+    $('[data-ebene-text]').textContent = `Ebene y = ${sicht.ebene}${welt}${sicht.ebene < 0 ? ' · unter dem Boden' : ''}`;
     renderer.shadowMap.needsUpdate = true;
     zeichnen();
   }
@@ -835,6 +896,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     szene.background = new THREE.Color(t.himmel);
     szene.fog.color.setHex(t.nebel);
     bodenMaterial.color.setHex(t.boden);
+    grubeMaterial.color.setHex(t.grube);
     hemi.color.setHex(t.hemi[0]);
     hemi.groundColor.setHex(t.hemi[1]);
     hemi.intensity = t.hemi[2];
@@ -859,7 +921,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     strahl.setFromCamera(zeiger, kamera);
     const o = strahl.ray.origin;
     const v = strahl.ray.direction;
-    const grenzen = [[0, X], [0, Y], [0, Z]];
+    const grenzen = [[0, X], [-T, Y], [0, Z]];
     let t0 = 0;
     let t1 = Infinity;
     const start = [o.x, o.y, o.z];
@@ -874,7 +936,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
       t1 = Math.min(t1, t[1]);
     }
     if (t0 > t1) return null;
-    const zelle = [0, 1, 2].map((a) => Math.min(grenzen[a][1] - 1, Math.max(0, Math.floor(start[a] + rich[a] * (t0 + 1e-4)))));
+    const zelle = [0, 1, 2].map((a) => Math.min(grenzen[a][1] - 1, Math.max(grenzen[a][0], Math.floor(start[a] + rich[a] * (t0 + 1e-4)))));
     const schritt = rich.map((w) => (w > 0 ? 1 : -1));
     const delta = rich.map((w) => (Math.abs(w) < 1e-9 ? Infinity : Math.abs(1 / w)));
     const naechste = [0, 1, 2].map((a) => {
@@ -882,12 +944,16 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
       const kante = rich[a] > 0 ? zelle[a] + 1 : zelle[a];
       return (kante - start[a]) / rich[a];
     });
-    for (let n = 0; n < X + Y + Z + 3; n++) {
+    for (let n = 0; n < X + Y + T + Z + 3; n++) {
       const [x, y, z] = zelle;
-      if (x < 0 || x >= X || y < 0 || y >= Y || z < 0 || z >= Z) return null;
-      const i = x + z * X + y * X * Z;
-      const k = d.klasse[i];
-      if (k && k !== GEIST && ebenenSichtbar(y)) return { x, y, z, i };
+      if (x < 0 || x >= X || y < -T || y >= Y || z < 0 || z >= Z) return null;
+      if (ebenenSichtbar(y)) {
+        const i = x + z * X + y * X * Z;
+        const k = y >= 0 ? d.klasse[i] : 0;
+        if (k && k !== GEIST) return { x, y, z, i };
+        const j = x + z * X + (y + T) * X * Z;
+        if (sicht.innen && iz.klasse[j]) return { x, y, z, j, innen: true };
+      }
       const a = naechste[0] < naechste[1] ? (naechste[0] < naechste[2] ? 0 : 2) : naechste[1] < naechste[2] ? 1 : 2;
       zelle[a] += schritt[a];
       naechste[a] += delta[a];
@@ -900,12 +966,17 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     info.hidden = !t;
     if (t) {
       markierung.position.set(t.x + 0.5, t.y + 0.5, t.z + 0.5);
-      const e = d.eintraege[d.zellen[t.i] - 1];
-      const st = d.status[t.i];
-      const statusText = !hatDaten ? '' : st === STATUS.gebaut ? 'gebaut' : st === STATUS.falsch ? `falsch: dort steht ${blockName(d.ist.get(t.i))}` : 'noch offen';
       const rel = [t.x - g.x, t.y - g.y, t.z - g.z];
       const welt = anker ? `<span>Welt ${anker.x + rel[0]} / ${anker.y + rel[1]} / ${anker.z + rel[2]}</span>` : '';
-      info.innerHTML = `<b>${esc(blockName(e.block))}</b><span>${esc(e.teil)} · ${esc(plan.abschnitte[e.abschnitt].name)}</span><span>x ${rel[0]} · y ${rel[1]} · z ${rel[2]}</span>${welt}${statusText ? `<span>${esc(statusText)}</span>` : ''}`;
+      const wo = `<span>x ${rel[0]} · y ${rel[1]} · z ${rel[2]}</span>${welt}`;
+      if (t.innen) {
+        info.innerHTML = `<b>${esc(blockName(innenArten[iz.zellen[t.j] - 1]))}</b><span>${t.y < 0 ? 'Unter dem Gebäude' : 'Im Gebäude'} · live aus der Welt</span>${wo}`;
+      } else {
+        const e = d.eintraege[d.zellen[t.i] - 1];
+        const st = d.status[t.i];
+        const statusText = !hatDaten ? '' : st === STATUS.gebaut ? 'gebaut' : st === STATUS.falsch ? `falsch: dort steht ${blockName(d.ist.get(t.i))}` : 'noch offen';
+        info.innerHTML = `<b>${esc(blockName(e.block))}</b><span>${esc(e.teil)} · ${esc(plan.abschnitte[e.abschnitt].name)}</span>${wo}${statusText ? `<span>${esc(statusText)}</span>` : ''}`;
+      }
     }
     zeichnen();
   }
@@ -992,6 +1063,17 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
       materialZeigen();
     })
   );
+  $('[data-innen]')?.addEventListener('change', (e) => {
+    sicht.innen = e.target.checked;
+    festgehalten = false;
+    infoZeigen(null);
+    bodenZeigen();
+    ebenenZeigen();
+  });
+  $('[data-gelaende]')?.addEventListener('change', (e) => {
+    sicht.gelaende = e.target.checked;
+    innenNachbauen(innenStufen.keys());
+  });
 
 
   // ---------- Live: Blöcke ----------
@@ -1000,7 +1082,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
   // Frisch gesetzte Blöcke leuchten kurz auf, auch in der Gesamtansicht.
   const BLINK_MAX = 3000;
   const BLINK_MS = 6000;
-  const blinkFarbe = { gebaut: new THREE.Color(0x3fd17a), weg: new THREE.Color(0xf2a33c), falsch: new THREE.Color(0xe5392f) };
+  const blinkFarbe = { gebaut: new THREE.Color(0x3fd17a), weg: new THREE.Color(0xf2a33c), falsch: new THREE.Color(0xe5392f), innen: new THREE.Color(0x4aa8ff) };
   const blinkMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.8, depthWrite: false }), BLINK_MAX);
   blinkMesh.frustumCulled = false;
   blinkMesh.count = 0;
@@ -1012,9 +1094,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     blinker = blinker.filter((b) => b.bis > jetzt).slice(-BLINK_MAX);
     blinkMesh.count = blinker.length;
     blinker.forEach((b, i) => {
-      const y = Math.floor(b.zelle / (X * Z));
-      const q = b.zelle % (X * Z);
-      blinkMatrix.makeTranslation((q % X) + 0.5, y + 0.5, Math.floor(q / X) + 0.5);
+      blinkMatrix.makeTranslation(b.x + 0.5, b.y + 0.5, b.z + 0.5);
       blinkMesh.setMatrixAt(i, blinkMatrix);
       blinkMesh.setColorAt(i, b.farbe);
     });
@@ -1039,7 +1119,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
         if (sicht.modus !== 'alles') {
           for (const y of schmutzigeEbenen) {
             for (let i = y * X * Z; i < (y + 1) * X * Z; i++) zelleEinstufen(i);
-            stufeFuellen(y, ebeneBauen(y, d));
+            stufeFuellen(stufen[y], ebeneBauen(y, d));
           }
           renderer.shadowMap.needsUpdate = true;
         }
@@ -1073,7 +1153,8 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     if (neu === STATUS.gebaut) z.gebaut++;
     d.status[zelle] = neu;
     schmutzigeEbenen.add(y);
-    if (blinken) blinker.push({ zelle, farbe: neu === STATUS.gebaut ? blinkFarbe.gebaut : neu === STATUS.falsch ? blinkFarbe.falsch : blinkFarbe.weg, bis: jetzt + BLINK_MS });
+    const q = zelle - y * X * Z;
+    if (blinken) blinker.push({ x: q % X, y, z: Math.floor(q / X), farbe: neu === STATUS.gebaut ? blinkFarbe.gebaut : neu === STATUS.falsch ? blinkFarbe.falsch : blinkFarbe.weg, bis: jetzt + BLINK_MS });
   }
 
   function bloeckeAnwenden(liste, blinken) {
@@ -1095,6 +1176,145 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     const liste = [];
     for (let k = 0; k < d.anzahl; k++) liste.push([k, falsch.get(k) ?? (bits[k >> 3] & (1 << (k & 7)) ? 1 : 0)]);
     bloeckeAnwenden(liste, false);
+  }
+
+  // ---------- Live: Innenraum ----------
+  // Was in der Welt im Gebäude steht, vom Dach bis T Blöcke unter den Boden. Nur zum Ansehen: Es zählt nicht zum
+  // Baufortschritt und ist nie rot. Kommt in Stücken, eine Chunk-Säule je Stück (Aufbau in src/liveraum.ts).
+
+  const INNEN_BLINK_MAX = 600; // je Stück, sonst blinkt bei einem großen /fill das halbe Haus
+
+  function innenArt(block) {
+    let a = innenNr.get(block);
+    if (a === undefined) {
+      a = innenArten.length;
+      innenArten.push(block);
+      innenNr.set(block, a);
+      iz.formen.push(formVon(block));
+      innenErde.push(GELAENDE.test(block));
+    }
+    return a + 1;
+  }
+
+  function innenEinstufen(i) {
+    const a = iz.zellen[i];
+    iz.klasse[i] = 0;
+    if (!a || (!sicht.gelaende && innenErde[a - 1])) return;
+    iz.klasse[i] = iz.formen[a - 1].art;
+    iz.kachel[i] = a - 1;
+  }
+
+  // Neu gebaut wird in Häppchen von gut 20 ms je Bild, damit die Seite beim ersten Laden nicht hängt.
+  const innenOffen = new Set();
+  let innenLaeuft = false;
+  function innenNachbauen(ebenen) {
+    for (const L of ebenen) innenOffen.add(L);
+    if (innenLaeuft || !innenOffen.size) return;
+    innenLaeuft = true;
+    requestAnimationFrame(innenSchritt);
+  }
+  function innenSchritt() {
+    if (tot) return;
+    if (innenArten.length > innenAtlasArten) {
+      const alt = innenAtlas.value;
+      innenAtlas.value = atlasBauen(innenArten).tex;
+      innenAtlasArten = innenArten.length;
+      alt.dispose();
+    }
+    const bis = performance.now() + 20;
+    for (const L of innenOffen) {
+      innenOffen.delete(L);
+      for (let i = L * X * Z; i < (L + 1) * X * Z; i++) innenEinstufen(i);
+      stufeFuellen(innenStufen[L], ebeneBauen(L, iz), innenVoll, innenGlas);
+      if (performance.now() > bis) break;
+    }
+    ebenenZeigen();
+    if (innenOffen.size) requestAnimationFrame(innenSchritt);
+    else innenLaeuft = false;
+  }
+
+  // Ein Stück eintragen. Ebenen, in denen sich etwas geändert hat, kommen nach ebenen.
+  function stueckAnwenden(s, blinken, jetzt, ebenen) {
+    const [x0, z0, b, t] = s.k;
+    if (x0 < 0 || z0 < 0 || b < 1 || t < 1 || x0 + b > X || z0 + t > Z) return;
+    const arten = s.p.map(innenArt);
+    const flaeche = b * t;
+    let q = 0;
+    let blinks = 0;
+    for (let j = 0; j < s.r.length; j += 2) {
+      const wert = s.r[j + 1] ? arten[s.r[j + 1] - 1] : 0;
+      for (const ende = Math.min(q + s.r[j], flaeche * H); q < ende; q++) {
+        const L = Math.floor(q / flaeche);
+        const rest = q - L * flaeche;
+        const x = x0 + (rest % b);
+        const z = z0 + Math.floor(rest / b);
+        const i = x + z * X + L * X * Z;
+        if (iz.zellen[i] === wert) continue;
+        iz.zellen[i] = wert;
+        ebenen.add(L);
+        if (blinken && blinks++ < INNEN_BLINK_MAX) blinker.push({ x, y: L - T, z, farbe: wert ? blinkFarbe.innen : blinkFarbe.weg, bis: jetzt + BLINK_MS });
+      }
+    }
+  }
+
+  function innenEmpfangen(stuecke) {
+    const jetzt = performance.now();
+    const ebenen = new Set();
+    let blinkt = false;
+    for (const s of stuecke) {
+      const key = `${s.k[0]},${s.k[1]}`;
+      innenServer.add(key);
+      if (innenAngefragt.get(key) === s.h) innenAngefragt.delete(key);
+      if (innenHash.get(key) === s.h) continue;
+      // Was hier schon stand und sich ändert, leuchtet kurz auf. Das erste Laden nicht.
+      const bekannt = innenHash.has(key);
+      stueckAnwenden(s, bekannt, jetzt, ebenen);
+      blinkt ||= bekannt;
+      innenHash.set(key, s.h);
+    }
+    if (ebenen.size) innenNachbauen(ebenen);
+    if (blinkt) blinkZeigen();
+    bodenZeigen();
+    innenStandZeigen();
+  }
+
+  // Übersicht aus dem Start: welche Stücke es gibt. holen: fehlende gleich bestellen (nur über die Live-Leitung,
+  // der Live-Raum antwortet erst, wenn die Seite angemeldet ist).
+  function innenUebersicht(u, holen) {
+    if (!T || !u?.h) return;
+    for (const key of Object.keys(u.h)) innenServer.add(key);
+    innenStandZeigen();
+    if (!holen || !senden) return;
+    const fehlt = Object.entries(u.h).filter(([key, h]) => innenHash.get(key) !== h && innenAngefragt.get(key) !== h);
+    if (fehlt.length && senden({ t: 'innen-hol', keys: fehlt.map(([key]) => key) })) for (const [key, h] of fehlt) innenAngefragt.set(key, h);
+  }
+
+  let bodenLoch = false;
+  function bodenZeigen() {
+    const loch = sicht.innen && innenHash.size > 0;
+    grube.visible = loch;
+    if (loch === bodenLoch) return;
+    bodenLoch = loch;
+    boden.geometry.dispose();
+    boden.geometry = bodenForm(loch);
+    renderer.shadowMap.needsUpdate = true;
+    zeichnen();
+  }
+
+  // So viele Chunk-Säulen berührt das Gebäude, so viele Stücke gibt es.
+  const vonX = anker ? anker.x - g.x : 0;
+  const vonZ = anker ? anker.z - g.z : 0;
+  const innenGesamt = (Math.floor((vonX + X - 1) / 16) - Math.floor(vonX / 16) + 1) * (Math.floor((vonZ + Z - 1) / 16) - Math.floor(vonZ / 16) + 1);
+  function innenStandZeigen() {
+    const el = $('[data-innen-stand]');
+    if (!el) return;
+    if (!anker) {
+      el.textContent = 'Sobald der Standort eingemessen ist, zeigt das Modell hier live, was im Gebäude steht.';
+      return;
+    }
+    const n = innenServer.size;
+    const rest = n < innenGesamt ? ', der Rest kommt, sobald jemand mit Bruno Live (ab Version 2.1) in der Nähe ist' : '';
+    el.textContent = `Was im Gebäude steht, vom Dach bis ${T} Blöcke unter den Boden, kommt live aus der Welt. Es zählt nicht zum Baufortschritt. ${zahl.format(n)} von ${zahl.format(innenGesamt)} Chunks gesehen${rest}.`;
   }
 
   // ---------- Live: Spieler ----------
@@ -1527,6 +1747,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
         standAnwenden(m.fortschritt);
         bauerPlanen(m.bauer);
         feedZeigen(m.feed, true);
+        innenUebersicht(m.innen, !m.lokal);
         zeichnen();
         break;
       }
@@ -1552,6 +1773,9 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
       case 'feed':
         feedZeigen([m.eintrag]);
         break;
+      case 'innen':
+        innenEmpfangen(m.stuecke);
+        break;
       case 'haut':
         hautVergessen(m.res);
         for (const [name, f] of figuren) {
@@ -1570,17 +1794,20 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     const chip = $('[data-live-chip]');
     chip.textContent = 'Verbindung weg …';
     chip.className = 'chip off';
+    innenAngefragt.clear(); // Bestellungen sind mit der Leitung weg. Beim nächsten Start wird neu bestellt.
   }
 
   modusZeigen();
   fortschrittZeigen();
   materialZeigen();
   standortZeigen();
+  innenStandZeigen();
   themaAnwenden();
   anpassen();
   blick('iso', true);
   geometrieBauen();
-  liveEmpfangen({ t: 'start', ...start });
+  // Der Stand vom Seitenaufruf. Den Innenraum bestellt erst der Start über die Live-Leitung.
+  liveEmpfangen({ t: 'start', ...start, lokal: true });
 
   const ende = () => {
     tot = true;
@@ -1598,6 +1825,10 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast }
     atlas.tex.dispose();
     wiese.dispose();
     stufen.forEach((s) => [s.voll, s.deckel, s.glas, s.geist].forEach((gruppe) => gruppe.children.forEach((m) => m.geometry.dispose())));
+    innenStufen.forEach((s) => [s.voll, s.deckel, s.glas].forEach((gruppe) => gruppe.children.forEach((m) => m.geometry.dispose())));
+    innenAtlas.value.dispose();
+    boden.geometry.dispose();
+    grube.geometry.dispose();
     renderer.dispose();
     renderer.forceContextLoss();
   };
