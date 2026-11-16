@@ -419,7 +419,7 @@ const THEMEN = {
 };
 
 // senden: Nachricht an den Live-Raum, gibt false zurück, wenn die Leitung gerade nicht steht.
-export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast, senden }, esc) {
+export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast, senden, neuAufbauen }, esc) {
   const d = planEntpacken(plan, start.fortschritt);
   const anker = start.anker ?? plan.anker;
   const server = start.server;
@@ -1233,12 +1233,16 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast, 
     else innenLaeuft = false;
   }
 
-  // Ein Stück eintragen. Ebenen, in denen sich etwas geändert hat, kommen nach ebenen.
+  // Ein Stück eintragen. Ebenen, in denen sich etwas geändert hat, kommen nach ebenen. false: passt nicht in dieses
+  // Raster (etwa vom Live-Raum mit anderer Tiefe als beim Seitenaufruf). Dann lieber nichts als an falscher Höhe.
   function stueckAnwenden(s, blinken, jetzt, ebenen) {
     const [x0, z0, b, t] = s.k;
-    if (x0 < 0 || z0 < 0 || b < 1 || t < 1 || x0 + b > X || z0 + t > Z) return;
-    const arten = s.p.map(innenArt);
+    if (x0 < 0 || z0 < 0 || b < 1 || t < 1 || x0 + b > X || z0 + t > Z) return false;
     const flaeche = b * t;
+    let summe = 0;
+    for (let j = 0; j < s.r.length; j += 2) summe += s.r[j];
+    if (summe !== flaeche * H) return false;
+    const arten = s.p.map(innenArt);
     let q = 0;
     let blinks = 0;
     for (let j = 0; j < s.r.length; j += 2) {
@@ -1255,6 +1259,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast, 
         if (blinken && blinks++ < INNEN_BLINK_MAX) blinker.push({ x, y: L - T, z, farbe: wert ? blinkFarbe.innen : blinkFarbe.weg, bis: jetzt + BLINK_MS });
       }
     }
+    return true;
   }
 
   function innenEmpfangen(stuecke) {
@@ -1268,7 +1273,7 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast, 
       if (innenHash.get(key) === s.h) continue;
       // Was hier schon stand und sich ändert, leuchtet kurz auf. Das erste Laden nicht.
       const bekannt = innenHash.has(key);
-      stueckAnwenden(s, bekannt, jetzt, ebenen);
+      if (!stueckAnwenden(s, bekannt, jetzt, ebenen)) continue;
       blinkt ||= bekannt;
       innenHash.set(key, s.h);
     }
@@ -1739,6 +1744,9 @@ export function zeigeBauplan(wurzel, { plan, start, istAdmin, speichern, toast, 
         onlineSetzen(m);
         break;
       case 'start': {
+        // Kurz nach einem Deploy kann der Seitenaufruf noch vom alten Live-Raum stammen, die Live-Leitung aber schon
+        // vom neuen. Passt die Tiefe des Innenraums nicht zu der, mit der die Seite gebaut ist: neu aufbauen.
+        if (!m.lokal && (m.innen?.tiefe ?? 0) !== T && neuAufbauen?.()) return;
         onlineSetzen(m);
         const da = new Set(m.pos.map((w) => w[0]));
         for (const name of [...figuren.keys()]) if (!da.has(name)) figurWeg(name);

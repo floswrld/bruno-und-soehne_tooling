@@ -1203,6 +1203,8 @@ function sprintDialog(sprint) {
 
 // ---------- Bauplan ----------
 
+let bauplanNeuAufgebaut = 0;
+
 async function viewPlan(main) {
   // Der Plan ist eine eigene Datei: gezippt vom CDN, das Budget des Workers bleibt unberührt.
   const [start, plan, modul] = await Promise.all([
@@ -1226,6 +1228,13 @@ async function viewPlan(main) {
       istAdmin,
       toast,
       senden: liveSenden,
+      neuAufbauen: () => {
+        // Höchstens einmal pro Minute, falls Seitenaufruf und Live-Leitung länger nicht zusammenpassen.
+        if (Date.now() - bauplanNeuAufgebaut < 60_000) return false;
+        bauplanNeuAufgebaut = Date.now();
+        route();
+        return true;
+      },
       speichern: async (werte) => {
         await api('PUT', '/bauplan/einstellung', werte);
         toast('Gespeichert.');
